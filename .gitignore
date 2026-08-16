@@ -1,0 +1,11 @@
+node_modules/
+dist/
+AGENTS.md
+*.log
+
+# 编辑器 / 工具目录
+.idea/
+.vscode/
+.omo/
+.codegraph/
+.playwright-mcp/
