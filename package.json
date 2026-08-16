@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@caict-bif/bif-typescript-sdk": "^0.1.1",
-    "@caict-bif/bop-typescript-sdk": "^1.1.1",
+    "@caict-bif/bop-typescript-sdk": "^1.1.2",
     "zod": "^4.0.1",
     "@caict-bif/bif-encryption": "^1.2.2"
   },
