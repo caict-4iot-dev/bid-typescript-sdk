@@ -1,4 +1,4 @@
-import { createBidSdk } from "../src/index.js"
+﻿import { createBidSdk } from "../src/index.js"
 
 /**
  * 运行：npm run sample
@@ -32,7 +32,13 @@ const signer = sdk.keypair.signer(identity.privateKey)
 const signature = signer.sign("deadbeef")
 const verified = signer.verify("deadbeef", signature)
 
-console.log({ address: identity.address, document, verified })
+// 原生公私钥与星火编码公私钥互转（纯本地）。
+const nativePrivateKeyHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+const encryptedPrivateKey = sdk.keypair.convert.toEncPrivateKey(nativePrivateKeyHex, "ED25519")
+const restored = sdk.keypair.convert.toRawPrivateKey(encryptedPrivateKey)
+// SM2 同样支持：sdk.keypair.convert.toEncPublicKey(nativePublicKeyHex, "SM2")
+
+console.log({ address: identity.address, document, verified, encryptedPrivateKey, restored })
 
 // 接入直连链节点与解析服务。
 sdk.connect({
