@@ -1,11 +1,17 @@
 node_modules/
 dist/
-AGENTS.md
 *.log
+.DS_Store
+AGENTS.md
 
-# 编辑器 / 工具目录
+# ????????
 .idea/
 .vscode/
+
+# AI ????
+.opencode/
+.codex/
+.cursor/
 .omo/
 .codegraph/
 .playwright-mcp/
