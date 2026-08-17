@@ -1,4 +1,4 @@
-import { z } from "zod"
+﻿import { z } from "zod"
 
 export const bidIdSchema = z.string().regex(/^did:bid:[A-Za-z0-9]+$/).brand<"BidId">()
 export type BidId = z.infer<typeof bidIdSchema>
@@ -63,6 +63,8 @@ export type TransactionOptions = {
 export type SubmittedTransaction = {
   readonly id: TransactionId
   readonly transport: "direct" | "bop"
+  /** true 表示链上已确认成功；false 表示提交后 2s 内未确认，需用 id 到浏览器核实。 */
+  readonly confirmed: boolean
 }
 
 export function parseBidId(value: string): BidId {

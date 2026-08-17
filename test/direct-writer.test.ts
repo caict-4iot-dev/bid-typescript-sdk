@@ -3,15 +3,15 @@ import test from "node:test"
 
 import type { Operation } from "@caict-bif/bif-typescript-sdk"
 
-import { DirectBidWriter, type DirectSdk, type DirectSigner, type DirectTransactionRequest } from "../src/chain.js"
+import { DirectBidWriter, type DirectSdk, type DirectSigner, type DirectTransactionRequest, type TransactionState } from "../src/chain.js"
 
 const contractAddress = "did:bid:efTEST0000000000000000000"
 
-test("Given a direct writer, when submitting a transaction, then it uses RANDOM_NONCE without querying account nonce", async () => {
-  const sdk = new FakeDirectSdk()
+test("Given a direct writer, when submitting a confirmed transaction, then it uses RANDOM_NONCE and returns status ok", async () => {
+  const sdk = new FakeDirectSdk({ kind: "confirmed", errorCode: 0, errorDesc: "" })
   const writer = new DirectBidWriter(contractAddress, sdk)
 
-  const id = await writer.submit('{"method":"create","params":{}}', { privateKey: "private-key" })
+  const outcome = await writer.submit('{"method":"create","params":{}}', { privateKey: "private-key" })
 
   const request = sdk.lastRequest
   assert.ok(request !== undefined)
@@ -21,21 +21,33 @@ test("Given a direct writer, when submitting a transaction, then it uses RANDOM_
   assert.ok(request.maxLedgerSeq >= 1_000)
   assert.equal(request.operations.length, 1)
   assert.equal(sdk.ledgerQueries, 1)
-  assert.match(id, /^[0-9a-f]{64}$/)
+  assert.equal(outcome.status, "ok")
+  assert.equal(outcome.hash.length, 64)
 })
 
-test("Given a direct writer and a chain rejection, when submitting, then it maps the failure reason", async () => {
-  const sdk = new FakeDirectSdk("Insufficient balance")
+test("Given a confirmed failure on chain, when submitting, then it throws the chain error with a user hint", async () => {
+  const sdk = new FakeDirectSdk({ kind: "confirmed", errorCode: 1, errorDesc: "Insufficient balance" })
   const writer = new DirectBidWriter(contractAddress, sdk)
 
   await assert.rejects(writer.submit("input", { privateKey: "private-key" }), /星火开放平台领取星火令/)
+})
+
+test("Given a transaction still in the pool, when submitting, then it returns pending with the hash after the timeout", async () => {
+  const sdk = new FakeDirectSdk({ kind: "pooled" })
+  const writer = new DirectBidWriter(contractAddress, sdk, { timeoutMs: 50, intervalMs: 10 })
+
+  const outcome = await writer.submit("input", { privateKey: "private-key" })
+
+  assert.equal(outcome.status, "pending")
+  assert.match(outcome.hint, new RegExp(outcome.hash))
+  assert.match(outcome.hint, /区块链浏览器/)
 })
 
 class FakeDirectSdk implements DirectSdk {
   ledgerQueries = 0
   lastRequest?: DirectTransactionRequest
 
-  constructor(private readonly failure?: string) {}
+  constructor(private readonly state: TransactionState) {}
 
   createSigner(): DirectSigner {
     return {
@@ -46,7 +58,6 @@ class FakeDirectSdk implements DirectSdk {
       },
       sendTransaction: async (transaction: DirectTransactionRequest) => {
         this.lastRequest = transaction
-        if (this.failure !== undefined) return { errorCode: 1, errorDescription: this.failure }
         return { hash: "a".repeat(64), errorCode: 0, errorDescription: "" }
       },
     }
@@ -54,5 +65,9 @@ class FakeDirectSdk implements DirectSdk {
 
   buildContractInvoke(): Operation {
     return { type: 7, pay_coin: {} }
+  }
+
+  async getTransactionState(): Promise<TransactionState> {
+    return this.state
   }
 }

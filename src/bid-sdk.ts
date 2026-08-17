@@ -1,8 +1,8 @@
-import { createBidDocument, type BidDocumentBuilder } from "./bid-document.js"
+﻿import { createBidDocument, type BidDocumentBuilder } from "./bid-document.js"
 import { createBopSdk, BopBidWriter, type BopNetworkConfig, type ChainWriter } from "./chain.js"
 import { createDirectSdk, DirectBidWriter, type DirectNetworkConfig } from "./chain.js"
 import { encodeCreatePayload, encodeReAuthPayload, encodeUpdatePayload } from "./contracts.js"
-import type { BidId, BuiltBidDocument, SubmittedTransaction, TransactionOptions, TransactionId } from "./domain.js"
+import type { BidId, BuiltBidDocument, SubmittedTransaction, TransactionOptions } from "./domain.js"
 import { BidConfigurationError } from "./errors.js"
 import { bidKeypairOperations, type BidKeypairOperations } from "./keypair.js"
 import { ParserBidReader, type BidReader, type ParserConfig } from "./parser.js"
@@ -62,15 +62,19 @@ export class BidSdk {
   }
 
   private async submit(input: string, transaction: TransactionOptions): Promise<SubmittedTransaction> {
-    const id: TransactionId = await this.writer.submit(input, transaction)
-    return { id, transport: this.writer.transport }
+    const outcome = await this.writer.submit(input, transaction)
+    if (outcome.status === "pending") {
+      // 交易已提交但 2s 未在链上确认：打印 hash，请用户到区块链浏览器核实。
+      console.warn(`[bid-sdk] ${outcome.hint}`)
+    }
+    return { id: outcome.hash, transport: this.writer.transport, confirmed: outcome.status === "ok" }
   }
 }
 
 function offlineWriter(): ChainWriter {
   return {
     transport: "direct",
-    async submit(): Promise<TransactionId> { throw networkRequired() },
+    async submit(): Promise<never> { throw networkRequired() },
   }
 }
 
