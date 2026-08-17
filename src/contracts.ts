@@ -13,9 +13,10 @@ export type ResolvedTransactionOptions = {
   readonly gasPrice: number
   readonly amount: number
   readonly remarks?: string
+  readonly async: boolean
 }
 
-/** 补全交易参数默认值：feeLimit/gasPrice/amount 未传时用 SDK 默认。 */
+/** 补全交易参数默认值：feeLimit/gasPrice/amount 未传时用 SDK 默认，async 默认 false（等待确认）。 */
 export function resolveTransactionOptions(options: TransactionOptions): ResolvedTransactionOptions {
   return {
     privateKey: options.privateKey,
@@ -23,6 +24,7 @@ export function resolveTransactionOptions(options: TransactionOptions): Resolved
     gasPrice: options.gasPrice ?? DEFAULT_TRANSACTION_OPTIONS.gasPrice,
     amount: options.amount ?? DEFAULT_TRANSACTION_OPTIONS.amount,
     ...(options.remarks === undefined ? {} : { remarks: options.remarks }),
+    async: options.async ?? false,
   }
 }
 

@@ -19,9 +19,10 @@ export type BopNetworkConfig = {
   readonly apiSecret: string
 }
 
-/** 提交结果：ok 表示链上已确认成功；pending 表示 2s 内未确认，需用 hash 到浏览器核实。 */
+/** 提交结果：ok 表示链上已确认成功；submitted 表示异步提交成功（未确认）；pending 表示 3s 内未确认，需用 hash 到浏览器核实。 */
 export type SubmissionOutcome =
   | { readonly status: "ok"; readonly hash: TransactionId }
+  | { readonly status: "submitted"; readonly hash: TransactionId }
   | { readonly status: "pending"; readonly hash: TransactionId; readonly hint: string }
 
 /** 链上交易状态。 */
@@ -30,7 +31,7 @@ export type TransactionState =
   | { readonly kind: "pooled" }
   | { readonly kind: "unknown" }
 
-/** 写链统一入口：把编码好的合约 input 提交到链上，并在 2s 内确认结果。 */
+/** 写链统一入口：把编码好的合约 input 提交到链上，并在 3s 内确认结果。 */
 export interface ChainWriter {
   readonly transport: "direct" | "bop"
   submit(input: string, transaction: TransactionOptions): Promise<SubmissionOutcome>
@@ -66,7 +67,7 @@ export type ConfirmOptions = {
   readonly intervalMs?: number
 }
 
-const DEFAULT_CONFIRM_OPTIONS = { timeoutMs: 2_000, intervalMs: 500 } as const
+const DEFAULT_CONFIRM_OPTIONS = { timeoutMs: 3_000, intervalMs: 500 } as const
 
 export class DirectBidWriter implements ChainWriter {
   readonly transport = "direct" as const
@@ -93,7 +94,10 @@ export class DirectBidWriter implements ChainWriter {
       maxLedgerSeq,
     })
     if (result.errorCode !== 0 || result.hash === undefined) throw new TransactionSubmissionError("direct", result.errorDescription)
-    return confirmTransaction("direct", transactionIdSchema.parse(result.hash), () => this.sdk.getTransactionState(result.hash ?? ""), this.confirm)
+    const hash = transactionIdSchema.parse(result.hash)
+    // 异步模式：提交成功即返回，不等待上链确认。
+    if (options.async) return { status: "submitted", hash }
+    return confirmTransaction("direct", hash, () => this.sdk.getTransactionState(result.hash ?? ""), this.confirm)
   }
 }
 
@@ -169,7 +173,10 @@ export class BopBidWriter implements ChainWriter {
     const offline = await this.sdk.buildContractInvoke({ contractAddress: this.contractAddress, payload: input, transaction: options })
     const result = await this.sdk.submitTransaction(offline)
     if (result.errorCode !== 0 || result.hash === undefined) throw new TransactionSubmissionError("bop", result.errorDescription)
-    return confirmTransaction("bop", transactionIdSchema.parse(result.hash), () => this.sdk.getTransactionState(result.hash ?? ""), this.confirm)
+    const hash = transactionIdSchema.parse(result.hash)
+    // 异步模式：提交成功即返回，不等待上链确认。
+    if (options.async) return { status: "submitted", hash }
+    return confirmTransaction("bop", hash, () => this.sdk.getTransactionState(result.hash ?? ""), this.confirm)
   }
 }
 

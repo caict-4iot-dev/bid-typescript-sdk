@@ -58,12 +58,14 @@ export type TransactionOptions = {
   readonly gasPrice?: number
   readonly amount?: number
   readonly remarks?: string
+  /** true 时不等待上链确认，提交后直接返回交易 hash；默认等待 3s 确认结果。 */
+  readonly async?: boolean
 }
 
 export type SubmittedTransaction = {
   readonly id: TransactionId
   readonly transport: "direct" | "bop"
-  /** true 表示链上已确认成功；false 表示提交后 2s 内未确认，需用 id 到浏览器核实。 */
+  /** true 表示链上已确认成功；false 表示提交后 3s 内未确认，需用 id 到浏览器核实。 */
   readonly confirmed: boolean
 }
 

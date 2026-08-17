@@ -43,8 +43,20 @@ test("Given a transaction still in the pool, when submitting, then it returns pe
   assert.match(outcome.hint, /区块链浏览器/)
 })
 
+test("Given the async option, when submitting, then it returns the hash immediately without waiting", async () => {
+  const sdk = new FakeDirectSdk({ kind: "pooled" })
+  const writer = new DirectBidWriter(contractAddress, sdk, { timeoutMs: 50, intervalMs: 10 })
+
+  const outcome = await writer.submit("input", { privateKey: "private-key", async: true })
+
+  assert.equal(outcome.status, "submitted")
+  assert.equal(outcome.hash.length, 64)
+  assert.equal(sdk.stateQueries, 0)
+})
+
 class FakeDirectSdk implements DirectSdk {
   ledgerQueries = 0
+  stateQueries = 0
   lastRequest?: DirectTransactionRequest
 
   constructor(private readonly state: TransactionState) {}
@@ -68,6 +80,7 @@ class FakeDirectSdk implements DirectSdk {
   }
 
   async getTransactionState(): Promise<TransactionState> {
+    this.stateQueries += 1
     return this.state
   }
 }
