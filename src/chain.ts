@@ -137,11 +137,23 @@ export function createDirectSdk(config: DirectNetworkConfig): DirectSdk {
     },
     buildContractInvoke,
     async getTransactionState(hash): Promise<TransactionState> {
-      const history = await provider.transaction.getTransactionHistory({ hash })
-      const confirmed = findTransaction(history["transactions"], hash)
+      // 交易刚提交未打包时，直连节点对历史/缓存池查询会返回“结果不存在”错误，
+      // 这里按“未确认”处理，交给上层继续轮询。
+      let historyTransactions: unknown
+      try {
+        historyTransactions = (await provider.transaction.getTransactionHistory({ hash }))["transactions"]
+      } catch {
+        historyTransactions = undefined
+      }
+      const confirmed = findTransaction(historyTransactions, hash)
       if (confirmed !== undefined) return confirmed
-      const cache = await provider.transaction.getTransactionCache({ hash })
-      if (findTransaction(cache["transactions"], hash) !== undefined) return { kind: "pooled" }
+      let cacheTransactions: unknown
+      try {
+        cacheTransactions = (await provider.transaction.getTransactionCache({ hash }))["transactions"]
+      } catch {
+        cacheTransactions = undefined
+      }
+      if (findTransaction(cacheTransactions, hash) !== undefined) return { kind: "pooled" }
       return { kind: "unknown" }
     },
   }
