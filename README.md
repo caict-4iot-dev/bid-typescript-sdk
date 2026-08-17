@@ -22,6 +22,55 @@ npm run sample -- direct   # 直连链节点
 npm run sample -- bop      # 开放平台
 ```
 
+## 在其他项目中通过 npm 使用
+
+```bash
+npm install @caict-bif/bid-typescript-sdk
+```
+
+- 依赖会一并安装：`@caict-bif/bif-encryption`（密钥）、`@caict-bif/bif-typescript-sdk`（直连链节点）、`@caict-bif/bop-typescript-sdk`（开放平台），无需额外配置。
+- 要求 Node >= 20。
+
+最小可用代码：
+
+```ts
+import { createBidSdk } from "@caict-bif/bid-typescript-sdk"
+
+const sdk = createBidSdk()
+sdk.connect({
+  mode: "bop",                       // 或用 mode: "direct" 配 direct 节点
+  contractAddress: "did:bid:你的BID合约地址",
+  parser: { baseUrl: "https://你的解析服务地址/bid/" },
+  bop: {
+    baseUrl: "https://你的开放平台地址",
+    apiKey: "你的开放平台 API Key",
+    apiSecret: "",                   // 无秘钥可留空
+  },
+})
+
+const identity = sdk.keypair.generate()
+const document = sdk.document
+  .create(identity.address)
+  .addAuthentication(`${identity.address}#key-1`)
+  .build()
+
+// 写链账户需要是链上已激活、有余额的账户；异步模式提交后立即返回 hash。
+const created = await sdk.bid.create(document, { privateKey: "已激活账户私钥" })
+console.log(created) // { id: 交易hash, transport: "bop", confirmed: true }
+
+// 等待解析系统索引后读取文档。
+const resolved = await sdk.bid.resolve(identity.address)
+```
+
+常见提醒：
+
+- 星火链域名的证书链可能不被 Node 内置 CA 信任。生产环境请通过
+  `NODE_EXTRA_CA_CERTS` 提供证书链；本机联调可临时 `NODE_TLS_REJECT_UNAUTHORIZED=0`，
+  不要在代码里默认关闭证书校验。
+- 写链源账户必须在链上激活且有燃料费（星火令）余额，否则错误信息会提示去开放平台
+  领取/激活。
+- `update`、`reAuth` 需要签名账户对文档有权限，详见下方“写链账户与文档权限”。
+
 ## 离线使用
 
 离线 SDK 不依赖任何网络配置：
