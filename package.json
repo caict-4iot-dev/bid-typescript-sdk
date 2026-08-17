@@ -16,9 +16,9 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/bid-document-builder.test.ts test/bid-sdk.test.ts test/direct-writer.test.ts test/keypair.test.ts test/payload.test.ts test/parser-reader.test.ts test/transaction-failure.test.ts test/transaction-options.test.ts",
-    "sample": "tsx sample/bif-usage.ts",
-    "sample:bop": "tsx sample/bop-usage.ts",
-    "check": "npm run typecheck && npm test"
+    "sample": "tsx sample/usage.ts",
+    "check": "npm run typecheck && npm test",
+    "sample:local": "tsx sample/usage.local.ts"
   },
   "dependencies": {
     "@caict-bif/bif-typescript-sdk": "^0.1.1",

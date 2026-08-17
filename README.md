@@ -15,8 +15,12 @@ sdk.connect({
 })
 ```
 
-完整示例见 `sample/bif-usage.ts`（直连）和 `sample/bop-usage.ts`（开放平台），
-用 `npm run sample` / `npm run sample:bop` 运行。
+完整示例见 `sample/usage.ts`，一个示例通过参数选择直连或开放平台：
+
+```bash
+npm run sample -- direct   # 直连链节点
+npm run sample -- bop      # 开放平台
+```
 
 ## 离线使用
 
@@ -83,7 +87,7 @@ await sdk.bid.reAuth({
 const resolved = await sdk.bid.resolve(identity.address)
 ```
 
-`feeLimit`、`gasPrice` 有默认值，需要调整时在单次交易里覆盖即可：
+`feeLimit`、`gasPrice` 有默认值（1_000_000 / 1），需要调整时在单次交易里覆盖即可：
 
 ```ts
 await sdk.bid.create(document, { privateKey: identity.privateKey, feeLimit: 2_000_000 })

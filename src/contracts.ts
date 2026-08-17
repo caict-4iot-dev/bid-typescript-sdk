@@ -3,7 +3,7 @@ import type { BidId, BuiltBidDocument, TransactionOptions } from "./domain.js"
 /** 写链费用等参数的默认值。 */
 export const DEFAULT_TRANSACTION_OPTIONS = {
   feeLimit: 1_000_000,
-  gasPrice: 100,
+  gasPrice: 1,
   amount: 0,
 } as const
 

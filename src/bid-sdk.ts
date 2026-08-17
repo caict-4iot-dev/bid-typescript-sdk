@@ -64,7 +64,7 @@ export class BidSdk {
   private async submit(input: string, transaction: TransactionOptions): Promise<SubmittedTransaction> {
     const outcome = await this.writer.submit(input, transaction)
     if (outcome.status === "pending") {
-      // 交易已提交但 2s 未在链上确认：打印 hash，请用户到区块链浏览器核实。
+      // 交易已提交但 3s 未在链上确认：打印 hash，请用户到区块链浏览器核实。
       console.warn(`[bid-sdk] ${outcome.hint}`)
     }
     return { id: outcome.hash, transport: this.writer.transport, confirmed: outcome.status === "ok" }
