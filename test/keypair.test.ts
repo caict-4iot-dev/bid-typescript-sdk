@@ -48,6 +48,22 @@ test("Given an SM2 keypair, when converting native and encrypted keys, then it d
   assert.equal(bidKeypairOperations.convert.toEncPublicKey(rawPublic.keyHex, "SM2"), sm2.encPublicKey)
 })
 
+test("Given a keystore created for a BID private key, when decoding it with its password, then it returns that private key", () => {
+  const keypair = bidKeypairOperations.generate()
+  const keystore = enc.generateKeyStore(keypair.privateKey, "correct-password")
+
+  const decoded = bidKeypairOperations.keystore.toPrivateKey(JSON.stringify(keystore), "correct-password")
+
+  assert.equal(decoded, keypair.privateKey)
+})
+
+test("Given a keystore, when decoding it with the wrong password, then it rejects the request", () => {
+  const keypair = bidKeypairOperations.generate()
+  const keystore = enc.generateKeyStore(keypair.privateKey, "correct-password")
+
+  assert.throws(() => bidKeypairOperations.keystore.toPrivateKey(JSON.stringify(keystore), "wrong-password"))
+})
+
 test("Given malformed raw keys, when converting, then it rejects them", () => {
   assert.throws(() => bidKeypairOperations.convert.toEncPrivateKey("abcd", "ED25519"), /32 bytes/)
   assert.throws(() => bidKeypairOperations.convert.toEncPublicKey("ab", "SM2"), /65 bytes/)

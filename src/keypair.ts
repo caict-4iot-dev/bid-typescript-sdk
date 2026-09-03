@@ -2,6 +2,7 @@ import { BifSigner, generateKeyPair } from "@caict-bif/bif-typescript-sdk"
 import * as enc from "@caict-bif/bif-encryption"
 
 import { parseBidId, type BidId } from "./domain.js"
+import { BidValidationError } from "./errors.js"
 
 export type BidKeyPair = {
   readonly privateKey: string
@@ -35,11 +36,18 @@ export interface BidKeyConvertOperations {
   toRawPublicKey(encPublicKey: string): RawKeyResult
 }
 
+export interface BidKeystoreOperations {
+  /** 本地解密 keystore，返回星火编码明文私钥；调用方应仅临时使用返回值。 */
+  toPrivateKey(keystoreContent: string | object, password: string): string
+}
+
 export interface BidKeypairOperations {
   generate(chainCode?: string): BidKeyPair
   signer(privateKey: string): BidSigner
   /** 原生密钥与星火编码密钥互转。 */
   convert: BidKeyConvertOperations
+  /** keystore 本地解密；返回值可继续传给现有需要 privateKey 的 API。 */
+  keystore: BidKeystoreOperations
 }
 
 const ALGORITHM_TAG = { ED25519: enc.CRYPTO_ED25519, SM2: enc.CRYPTO_SM2 } as const
@@ -67,6 +75,14 @@ const bidKeyConvert: BidKeyConvertOperations = {
   },
 }
 
+const bidKeystoreOperations: BidKeystoreOperations = {
+  toPrivateKey(keystoreContent, password): string {
+    const privateKey = enc.decipherKeyStore(keystoreContent, password)
+    if (typeof privateKey !== "string") throw new BidValidationError("keystore", "did not decrypt to a private key")
+    return privateKey
+  },
+}
+
 class WrappedBidSigner implements BidSigner {
   readonly address: string
   readonly publicKey: string
@@ -87,4 +103,5 @@ export const bidKeypairOperations: BidKeypairOperations = {
   },
   signer(privateKey: string): BidSigner { return new WrappedBidSigner(new BifSigner(privateKey)) },
   convert: bidKeyConvert,
+  keystore: bidKeystoreOperations,
 }
