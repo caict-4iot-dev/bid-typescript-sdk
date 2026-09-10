@@ -34,7 +34,7 @@ export type DelegateSign = z.infer<typeof delegateSignSchema>
 export const bidExtensionSchema = z.object({
   recovery: z.array(z.string().min(1)).optional(),
   ttl: z.number().int().nonnegative().safe().optional(),
-  "delegateSign ": delegateSignSchema.optional(),
+  delegateSign: delegateSignSchema.optional(),
   type: z.number().int().optional(),
 }).passthrough()
 export type BidExtension = z.infer<typeof bidExtensionSchema> & { readonly [key: string]: unknown }

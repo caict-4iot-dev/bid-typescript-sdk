@@ -115,7 +115,7 @@ class Builder implements BidDocumentBuilder {
       ...(recovery.length === 0 ? {} : { recovery }),
       ttl: ttl ?? DEFAULT_EXTENSION_TTL,
       type: extensionType ?? DEFAULT_EXTENSION_TYPE,
-      ...(delegateSign === undefined ? {} : { "delegateSign ": delegateSign }),
+      ...(delegateSign === undefined ? {} : { delegateSign }),
       ...extensionFields,
     }
   }

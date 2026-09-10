@@ -3,6 +3,11 @@ dist/
 *.log
 .DS_Store
 AGENTS.md
+.env
+.env.*
+!.env.example
+!.env.holder.example
+!.env.verifier.example
 
 # ????????
 .idea/
@@ -18,6 +23,10 @@ AGENTS.md
 
 # Local design drafts
 docs/vc-sdk-design.md
+docs/ed25519-vc-upgrade-todo.md
 
 # ?????????????????
 sample/*.local.ts
+
+# sample 运行时生成的本地文件（身份/申请/凭证）
+sample/output/

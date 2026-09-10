@@ -9,8 +9,8 @@ export class BidValidationError extends Error {
 export class BidConfigurationError extends Error {
   readonly name = "BidConfigurationError"
 
-  constructor(readonly field: string, readonly reason: string) {
-    super(`${field}: ${reason}`)
+  constructor(readonly field: string, readonly reason: string, options?: ErrorOptions) {
+    super(`${field}: ${reason}`, options)
   }
 }
 
