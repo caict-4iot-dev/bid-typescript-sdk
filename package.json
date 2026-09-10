@@ -15,16 +15,22 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/bid-document-builder.test.ts test/bid-sdk.test.ts test/direct-writer.test.ts test/keypair.test.ts test/payload.test.ts test/parser-reader.test.ts test/transaction-failure.test.ts test/transaction-options.test.ts",
-    "sample": "tsx sample/usage.ts",
-    "check": "npm run typecheck && npm test",
-    "sample:local": "tsx sample/usage.local.ts"
+    "test": "node --import tsx --test test/bid-document-builder.test.ts test/bid-sdk.test.ts test/direct-writer.test.ts test/keypair.test.ts test/payload.test.ts test/parser-reader.test.ts test/sdk-config.test.ts test/transaction-failure.test.ts test/transaction-options.test.ts",
+    "test:vc": "node --import tsx --test test/vc-jws.test.ts test/vc-platform-auth.test.ts test/vc-roles.test.ts test/vc-verifier.test.ts test/vc-local-protocol.test.ts test/vc-trust.test.ts test/vc-disclosure.test.ts test/vc-flow.test.ts test/vc-interop-vector.test.ts",
+    "typecheck:vc": "tsc --project tsconfig.vc.json",
+    "check:vc": "npm run typecheck:vc && npm run test:vc",
+    "sample:holder": "node --env-file=.env.holder --import tsx sample/holder.ts",
+    "sample:verifier": "node --env-file-if-exists=.env.verifier --import tsx sample/verifier.ts",
+    "sample": "node --env-file=.env --import tsx sample/usage.ts",
+    "check": "npm run typecheck && npm test"
   },
   "dependencies": {
-    "@caict-bif/bif-typescript-sdk": "^0.1.2",
-    "@caict-bif/bop-typescript-sdk": "^1.1.2",
-    "zod": "^4.0.1",
-    "@caict-bif/bif-encryption": "^1.2.2"
+    "@caict-bif/bif-encryption": "^1.2.2",
+    "@caict-bif/bif-typescript-sdk": "^0.2.0",
+    "@caict-bif/bop-typescript-sdk": "^1.2.0",
+    "brdc-sm-crypto": "^0.3.7",
+    "canonicalize": "^4.0.0",
+    "zod": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

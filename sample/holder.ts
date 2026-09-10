@@ -1,0 +1,302 @@
+import { existsSync } from "node:fs"
+import { readFile } from "node:fs/promises"
+import { resolve } from "node:path"
+
+import {
+  configureBidSdk,
+  createBidSdk,
+  parseApplyNo,
+  parseCredentialId,
+  parseJws,
+  vcPayloadSchema,
+  type PlatformSession,
+  type VcHolder,
+  type VcSigner,
+} from "../src/index.js"
+import type { VcPlatformClient } from "../src/vc/vc-platform.js"
+import {
+  holderApplicationPath,
+  holderCredentialPath,
+  holderIdentityPath,
+  loadApplication,
+  loadLatestCredential,
+  type HolderCredentialFile,
+  writeApplication,
+  writeCredential,
+  writeIdentity,
+  writePresentation,
+} from "./holder-files.js"
+
+/**
+ * 持证方示例 CLI。
+ * 用法：npm run sample:holder -- <command> [--key=value]
+ *
+ * 命令：
+ *   generate        生成持证方公私钥并保存身份文件
+ *   list            查询可申请的普通凭证（type=2，持证方凭证）
+ *   apply           申请凭证（assert + apply）
+ *   status          查看申请进度
+ *   download        下载已签发凭证
+ *   export          导出凭证文件并打印绝对路径
+ *   help            显示帮助
+ *
+ * 每个命令都从身份文件读取私钥并重新登录平台，accessToken 不持久化。
+ * generate/list/apply/status/download 需要网络与平台登录；export 是纯本地操作，
+ * 只读取已下载的凭证文件并写出示文件，不访问平台。
+ * 身份文件是明文私钥，仅供本地演示；sample/output 已加入 .gitignore。
+ * 真实环境联调：持证方只依赖 VC 平台 HTTP 接口，不写链、不解析、不验证，
+ * 因此只需在 .env.holder 配置 VC_PLATFORM_BASE_URL 主机根地址，不要包含 /server；
+ * SDK 内部固定拼接 server/... 路由（凭证接口缺省复用同一地址）。
+ * 请勿把真实私钥/API Key 提交到 git。
+ */
+
+type ParsedArgs = {
+  readonly positionals: readonly string[]
+  readonly options: Readonly<Record<string, string>>
+}
+
+function parseArgs(argv: readonly string[]): ParsedArgs {
+  const positionals: string[] = []
+  const options: Record<string, string> = {}
+  for (const item of argv) {
+    const match = /^--([a-zA-Z0-9-]+)=(.*)$/.exec(item)
+    if (match !== null) {
+      options[match[1]!] = match[2]!
+    } else {
+      positionals.push(item)
+    }
+  }
+  return { positionals, options }
+}
+
+function readOption(options: Readonly<Record<string, string>>, name: string, envName?: string): string | undefined {
+  const value = options[name] ?? (envName === undefined ? undefined : process.env[envName])
+  return value === undefined || value === "" ? undefined : value
+}
+
+function requireFile(filePath: string, hint: string): void {
+  if (!existsSync(filePath)) {
+    console.error(`缺少文件：${filePath}\n提示：${hint}`)
+    process.exit(1)
+  }
+}
+
+function printSection(title: string): void {
+  console.log(`\n===== ${title} =====`)
+}
+
+// ---------- SDK / 登录 ----------
+
+async function setupHolder(): Promise<{ platform: VcPlatformClient; holder: VcHolder }> {
+  configureHolderSdk()
+  const sdk = createBidSdk()
+  const platform = sdk.vc.platform.create()
+  const holder = sdk.vc.holder.create(platform)
+  return { platform, holder }
+}
+
+/** 持证方只需 VC 平台主机根地址，不要包含 /server；平台路由由 SDK 内部固定。 */
+function configureHolderSdk(): void {
+  const vcPlatformUrl = process.env["VC_PLATFORM_BASE_URL"]
+  if (vcPlatformUrl === undefined || vcPlatformUrl === "") {
+    console.error("缺少 VC_PLATFORM_BASE_URL：请在 .env.holder 里填写VC 平台主机根地址")
+    process.exit(1)
+  }
+  configureBidSdk({ vcPlatformUrl })
+}
+
+async function loginAndSigner(platform: VcPlatformClient, privateKey: string): Promise<{ session: PlatformSession; signer: VcSigner }> {
+  const sdk = createBidSdk()
+  const signer = sdk.vc.signer.fromPrivateKey(privateKey)
+  const session = await platform.login({ bid: signer.address, signer })
+  return { session, signer }
+}
+
+async function requireIdentity(): Promise<{ bid: string; publicKey: string; privateKey: string }> {
+  requireFile(holderIdentityPath, "请先运行 npm run sample:holder -- generate")
+  const raw = await readFile(holderIdentityPath, "utf8")
+  return JSON.parse(raw) as { bid: string; publicKey: string; privateKey: string; createdAt: string }
+}
+
+async function loadStoredApplyNo(): Promise<string> {
+  requireFile(holderApplicationPath, "请先运行 npm run sample:holder -- apply")
+  const app = await loadApplication()
+  return app.applyNo
+}
+
+// ---------- 命令 ----------
+
+async function cmdGenerate(): Promise<void> {
+  printSection("生成持证方身份")
+  const sdk = createBidSdk()
+  const keypair = sdk.keypair.generate()
+  const identity = {
+    bid: keypair.address,
+    publicKey: keypair.publicKey,
+    privateKey: keypair.privateKey,
+    createdAt: new Date().toISOString(),
+  }
+  const path = await writeIdentity(identity)
+  console.log({ bid: identity.bid, publicKey: identity.publicKey, identityFile: path })
+  console.log("身份已保存，后续命令会自动读取该文件并重新登录。")
+}
+
+async function cmdList(options: Readonly<Record<string, string>>): Promise<void> {
+  printSection("查询可申请凭证（type=2，SDK 固定持证方普通凭证）")
+  const identity = await requireIdentity()
+  const { platform, holder } = await setupHolder()
+  const { session } = await loginAndSigner(platform, identity.privateKey)
+  const pageSize = Number(readOption(options, "page-size") ?? "20")
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    console.error("page-size 必须是正整数")
+    process.exit(1)
+  }
+  const list = await holder.listRecommendedCredentials(session, {
+    pageStart: 1,
+    pageSize,
+  })
+  console.log(JSON.stringify(list, null, 2))
+}
+
+function readSubject(options: Readonly<Record<string, string>>): Record<string, string | number | boolean> | undefined {
+  const raw = readOption(options, "subject")
+  if (raw === undefined) return undefined
+  const parsed: unknown = JSON.parse(raw)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("--subject 必须是 JSON 对象")
+  }
+  return parsed as Record<string, string | number | boolean>
+}
+
+async function cmdApply(options: Readonly<Record<string, string>>): Promise<void> {
+  printSection("申请凭证")
+  const identity = await requireIdentity()
+  const templateId = readOption(options, "template-id")
+  if (templateId === undefined) {
+    console.error("缺少 templateId：请用 --template-id=... 指定申请模板")
+    process.exit(1)
+  }
+  const hold = readOption(options, "hold") === "1" ? "1" : undefined
+  const { platform, holder } = await setupHolder()
+  const { session } = await loginAndSigner(platform, identity.privateKey)
+  const subject = readSubject(options)
+  await holder.assertApplication(session, { templateId, ...(hold === undefined ? {} : { hold }) })
+  const applyNo = await holder.applyCredential(session, {
+    templateId,
+    ...(subject === undefined ? {} : { subject }),
+  })
+  const application = { applyNo, templateId, hold: hold === "1" ? 1 : 0, createdAt: new Date().toISOString() }
+  const path = await writeApplication(application)
+  console.log({ applyNo, applicationFile: path })
+}
+
+const statusEnumMap: Readonly<Record<string, string>> = {
+  "1": "申请中",
+  "2": "已通过",
+  "3": "已拒绝",
+}
+
+function formatStatus(status: { readonly status: string; readonly credentialId?: string | undefined }): string {
+  return JSON.stringify({
+    applyStatus: status.status,
+    applyStatusText: statusEnumMap[status.status] ?? "未知",
+    credentialId: status.credentialId,
+  }, null, 2)
+}
+
+async function cmdStatus(options: Readonly<Record<string, string>>): Promise<void> {
+  printSection("查看申请进度")
+  const identity = await requireIdentity()
+  const applyNo = readOption(options, "apply-no") ?? await loadStoredApplyNo()
+  const { platform, holder } = await setupHolder()
+  const { session } = await loginAndSigner(platform, identity.privateKey)
+  const status = await holder.getApplicationStatus(session, parseApplyNo(applyNo))
+  console.log(formatStatus(status))
+}
+
+async function cmdDownload(options: Readonly<Record<string, string>>): Promise<void> {
+  printSection("下载凭证")
+  const identity = await requireIdentity()
+  const applyNo = readOption(options, "apply-no") ?? await loadStoredApplyNo()
+  const { platform, holder } = await setupHolder()
+  const { session } = await loginAndSigner(platform, identity.privateKey)
+  const status = await holder.getApplicationStatus(session, parseApplyNo(applyNo))
+  const credentialId = readOption(options, "credential-id") ?? status.credentialId
+  if (credentialId === undefined) {
+    console.error("申请尚未签发成功（没有 credentialId），无法下载。请确认审核状态后再试。")
+    process.exit(1)
+  }
+  const downloaded = await holder.downloadCredential(session, { credentialId: parseCredentialId(credentialId) })
+  const parsed = holder.parseCredential(downloaded.jws)
+  if (parsed.credential.id !== credentialId) {
+    throw new Error("平台返回的凭证编号与 JWS 内容不一致，拒绝保存")
+  }
+  const credential: HolderCredentialFile = {
+    credentialId: parsed.credential.id,
+    jws: downloaded.jws,
+  }
+  const path = await writeCredential(credential)
+  console.log({ credentialId, issueBid: downloaded.issueBid, issueName: downloaded.issueName, file: path })
+}
+
+async function loadLatestCredentialWithPath(): Promise<{ filePath: string; credential: HolderCredentialFile }> {
+  const credential = await loadLatestCredential()
+  const filePath = holderCredentialPath(credential.credentialId)
+  requireFile(filePath, "请先运行 npm run sample:holder -- download")
+  return { filePath, credential }
+}
+
+async function cmdExport(): Promise<void> {
+  printSection("导出凭证")
+  const { filePath, credential } = await loadLatestCredentialWithPath()
+  // 与平台钱包/插件导出的标准 VC 信封保持一致（参考 demo.json）：
+  // proof.jwt 是原始三段式 compact JWS，其余字段来自 VC payload 的公开部分。
+  const parsed = parseJws(credential.jws)
+  const payload = vcPayloadSchema.parse(parsed.payload)
+  const presentation = {
+    "@context": payload["@context"],
+    credentialSubject: payload.credentialSubject as Record<string, unknown>,
+    issuer: { id: payload.issuer },
+    ...(payload.validBefore === undefined ? {} : { validBefore: payload.validBefore }),
+    type: payload.type,
+    issuanceDate: payload.issuanceDate,
+    proof: { type: "JwtProof2020" as const, jwt: credential.jws },
+  }
+  const path = await writePresentation(presentation)
+  console.log({ sourceFile: filePath, presentationFile: path })
+  console.log(`绝对路径：${resolve(path)}`)
+}
+
+// ---------- 入口 ----------
+
+const commands: Readonly<Record<string, (options: Readonly<Record<string, string>>) => Promise<void>>> = {
+  generate: cmdGenerate,
+  list: cmdList,
+  apply: cmdApply,
+  status: cmdStatus,
+  download: cmdDownload,
+  export: cmdExport,
+}
+
+function printHelp(): void {
+  console.error("用法：npm run sample:holder -- <command> [--key=value]")
+  console.error("命令：generate | list | apply | status | download | export | help")
+  console.error("常用参数：--page-size=... --template-id=... --subject='{\"key\":\"value\"}' --hold=1 --apply-no=... --credential-id=...")
+  console.error("配置：在 .env.holder 设置不含 /server 的 VC_PLATFORM_BASE_URL 主机根地址；平台路由由 SDK 固定")
+}
+
+async function main(argv: readonly string[]): Promise<void> {
+  const { positionals, options } = parseArgs(argv)
+  const command = positionals[0]
+  const run = command === undefined || command === "help" ? undefined : commands[command]
+  if (run === undefined) {
+    printHelp()
+    process.exit(command === "help" ? 0 : 1)
+  }
+  await run(options)
+}
+
+main(process.argv.slice(2)).catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : error)
+  process.exit(1)
+})
