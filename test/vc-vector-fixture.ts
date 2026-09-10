@@ -1,0 +1,174 @@
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+
+export type TestKey = {
+  readonly rawPrivateKeyHex: string
+  readonly encPrivateKey: string
+  readonly encPublicKey: string
+  readonly encAddress: string
+}
+
+export type Commitment = {
+  readonly value: string
+  readonly salt: string
+  readonly hash: string
+}
+
+export type VectorEntry = {
+  readonly name: string
+  readonly alg: "SM2" | "ED25519"
+  readonly parseType: string
+  readonly headerJson: string
+  readonly payloadJson: string
+  readonly signingPayloadJson: string
+  readonly headerPart: string
+  readonly payloadPart: string
+  readonly signingPayloadPart: string
+  readonly signingInput: string
+  readonly signingInputHex: string
+  readonly signatureHex: string
+  readonly signatureBase64UrlRaw: string
+  readonly signatureBase64UrlHexText: string
+  readonly jwsVcWire: string
+  readonly jwsVpWire: string
+  readonly commitments: Readonly<Record<string, Commitment>> | undefined
+}
+
+export type VectorSuite = {
+  readonly version: number
+  readonly keys: Readonly<Record<"sm2" | "ed25519", TestKey>>
+  readonly vectors: readonly VectorEntry[]
+}
+
+/**
+ * These vectors are generated offline by the Java module
+ * `bif-framework/bif-protocol` (`JwsInteropVectorTest`) with the real JWS and
+ * bif-chain-encryption APIs. Regenerate there after changing the recipe.
+ */
+const FIXTURE_URL = new URL(
+  "../../../../../星火/产品/超级节点/.src/International_vc/bif-framework/bif-protocol/src/test/resources/jws-vectors/vector-suite.json",
+  import.meta.url,
+)
+
+export function readVectorSuite(): VectorSuite {
+  const fixturePath = fileURLToPath(FIXTURE_URL)
+  const parsed: unknown = JSON.parse(readFileSync(fixturePath, "utf8"))
+  return parseSuite(parsed)
+}
+
+export function hashAlgorithmFor(alg: VectorEntry["alg"]): "SM3" | "SHA-256" {
+  switch (alg) {
+    case "SM2": return "SM3"
+    case "ED25519": return "SHA-256"
+  }
+}
+
+export function keyFor(keys: VectorSuite["keys"], alg: VectorEntry["alg"]): TestKey {
+  switch (alg) {
+    case "SM2": return keys.sm2
+    case "ED25519": return keys.ed25519
+  }
+}
+
+function parseSuite(raw: unknown): VectorSuite {
+  const suite = asRecord(raw, "vector suite")
+  const keysRaw = asRecord(required(suite, "keys"), "keys")
+  const vectorsRaw = asArray(required(suite, "vectors"), "vectors")
+  const keys = {
+    sm2: parseKey(asRecord(required(keysRaw, "sm2"), "keys.sm2")),
+    ed25519: parseKey(asRecord(required(keysRaw, "ed25519"), "keys.ed25519")),
+  }
+  return {
+    version: asInteger(required(suite, "version"), "version"),
+    keys,
+    vectors: vectorsRaw.map((rawVector, index) => parseVector(asRecord(rawVector, `vectors[${index}]`))),
+  }
+}
+
+function parseKey(raw: Record<string, unknown>): TestKey {
+  return {
+    rawPrivateKeyHex: asHexString(required(raw, "rawPrivateKeyHex"), "rawPrivateKeyHex"),
+    encPrivateKey: asString(required(raw, "encPrivateKey"), "encPrivateKey"),
+    encPublicKey: asHexString(required(raw, "encPublicKey"), "encPublicKey"),
+    encAddress: asString(required(raw, "encAddress"), "encAddress"),
+  }
+}
+
+function parseVector(raw: Record<string, unknown>): VectorEntry {
+  const alg = asAlg(required(raw, "alg"))
+  const commitmentsRaw = raw["commitments"]
+  const commitments = commitmentsRaw === undefined
+    ? undefined
+    : parseCommitments(asRecord(commitmentsRaw, "commitments"))
+  return {
+    name: asString(required(raw, "name"), "name"),
+    alg,
+    parseType: asString(required(raw, "parseType"), "parseType"),
+    headerJson: asString(required(raw, "headerJson"), "headerJson"),
+    payloadJson: asString(required(raw, "payloadJson"), "payloadJson"),
+    signingPayloadJson: asString(required(raw, "signingPayloadJson"), "signingPayloadJson"),
+    headerPart: asString(required(raw, "headerPart"), "headerPart"),
+    payloadPart: asString(required(raw, "payloadPart"), "payloadPart"),
+    signingPayloadPart: asString(required(raw, "signingPayloadPart"), "signingPayloadPart"),
+    signingInput: asString(required(raw, "signingInput"), "signingInput"),
+    signingInputHex: asHexString(required(raw, "signingInputHex"), "signingInputHex"),
+    signatureHex: asHexString(required(raw, "signatureHex"), "signatureHex"),
+    signatureBase64UrlRaw: asString(required(raw, "signatureBase64UrlRaw"), "signatureBase64UrlRaw"),
+    signatureBase64UrlHexText: asString(required(raw, "signatureBase64UrlHexText"), "signatureBase64UrlHexText"),
+    jwsVcWire: asString(required(raw, "jwsVcWire"), "jwsVcWire"),
+    jwsVpWire: asString(required(raw, "jwsVpWire"), "jwsVpWire"),
+    commitments,
+  }
+}
+
+function parseCommitments(raw: Record<string, unknown>): Readonly<Record<string, Commitment>> {
+  const result: Record<string, Commitment> = {}
+  for (const [field, value] of Object.entries(raw)) {
+    const record = asRecord(value, `commitments.${field}`)
+    result[field] = {
+      value: asString(required(record, "value"), `commitments.${field}.value`),
+      salt: asString(required(record, "salt"), `commitments.${field}.salt`),
+      hash: asHexString(required(record, "hash"), `commitments.${field}.hash`),
+    }
+  }
+  return result
+}
+
+function required(record: Record<string, unknown>, field: string): unknown {
+  const value = record[field]
+  if (value === undefined || value === null) throw new Error(`fixture.${field} is required`)
+  return value
+}
+
+function asString(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new Error(`fixture.${field} must be a string`)
+  return value
+}
+
+function asHexString(value: unknown, field: string): string {
+  const text = asString(value, field)
+  if (!/^[0-9a-fA-F]+$/.test(text)) throw new Error(`fixture.${field} must be hex`)
+  return text
+}
+
+function asInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(`fixture.${field} must be an integer`)
+  return value
+}
+
+function asAlg(value: unknown): VectorEntry["alg"] {
+  if (value !== "SM2" && value !== "ED25519") throw new Error("fixture alg must be SM2 or ED25519")
+  return value
+}
+
+function asRecord(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`fixture.${field} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function asArray(value: unknown, field: string): readonly unknown[] {
+  if (!Array.isArray(value)) throw new Error(`fixture.${field} must be an array`)
+  return value
+}

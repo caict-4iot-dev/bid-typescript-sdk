@@ -1,9 +1,18 @@
 ﻿import assert from "node:assert/strict"
 import test from "node:test"
 
-import { BidConfigurationError, createBidSdk, parseBidId } from "../src/index.js"
+import { BidConfigurationError, configureBidSdk, createBidSdk, parseBidId } from "../src/index.js"
 
 const id = parseBidId("did:bid:efnVUgqQFfYeu97ABf6sGm3WFtVXHZB2")
+
+configureBidSdk({
+  directNodeUrl: "https://test-node.example.com",
+  bopUrl: "https://bop.example.com",
+  parserUrl: "http://localhost:8088",
+  vcPlatformUrl: "https://wallet.example.com",
+  vcCredentialUrl: "https://credential.example.com",
+  vcVerificationUrl: "https://verify.example.com",
+})
 
 test("Given no network configuration, when generating an identity and document, then offline APIs work", () => {
   const sdk = createBidSdk()
@@ -20,6 +29,7 @@ test("Given no network configuration, when submitting a document, then it explai
 
   await assert.rejects(sdk.bid.create(document, { privateKey: identity.privateKey }), BidConfigurationError)
   await assert.rejects(sdk.bid.resolve(id), BidConfigurationError)
+  assert.throws(() => sdk.vc.verifier.verifyCredential({ jws: "invalid" }), BidConfigurationError)
 })
 
 test("Given direct connection config, when connect runs, then the same SDK gains write and resolve ability", () => {
@@ -27,9 +37,6 @@ test("Given direct connection config, when connect runs, then the same SDK gains
 
   const result = sdk.connect({
     mode: "direct",
-    contractAddress: "did:bid:efTEST0000000000000000000",
-    parser: { baseUrl: "http://localhost:8088" },
-    direct: { nodeUrl: "https://test-node.example.com" },
   })
 
   assert.equal(result, sdk)
@@ -40,13 +47,8 @@ test("Given bop connection config, when connect runs, then the same SDK uses the
 
   const result = sdk.connect({
     mode: "bop",
-    contractAddress: "did:bid:efTEST0000000000000000000",
-    parser: { baseUrl: "http://localhost:8088" },
-    bop: {
-      baseUrl: "https://bop.example.com",
-      apiKey: "api-key",
-      apiSecret: "api-secret",
-    },
+    apiKey: "api-key",
+    apiSecret: "api-secret",
   })
 
   assert.equal(result, sdk)

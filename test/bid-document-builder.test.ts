@@ -23,7 +23,7 @@ test("Given only an id, when build runs, then SDK defaults apply", () => {
   assert.match(document.updated ?? "", /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
 })
 
-test("Given explicit fields, when build runs, then it emits the provided values and no duplicate context key", () => {
+test("Given delegate signing data, when build runs, then it emits delegateSign without a trailing space", () => {
   const document = createBidDocument()
     .setId(bidId)
     .setContext(["https://w3.org/ns/did/v1"])
@@ -38,7 +38,8 @@ test("Given explicit fields, when build runs, then it emits the provided values 
   assert.deepEqual(document["@context"], ["https://w3.org/ns/did/v1", "https://example.com/extra"])
   assert.deepEqual(document.authentication, [`${bidId}#key-1`, `${bidId}#key-2`])
   assert.deepEqual(document.extension?.recovery, [`${bidId}#key-2`])
-  assert.equal(document.extension?.["delegateSign "]?.signatureValue, "signature")
+  assert.equal(document.extension?.delegateSign?.signatureValue, "signature")
+  assert.equal("delegateSign " in (document.extension ?? {}), false)
   assert.deepEqual(document.extension?.["customObject"], { nested: true })
   assert.equal("context" in document, false)
 })

@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/vc/**/*.ts",
+    "src/domain.ts",
+    "src/errors.ts",
+    "src/brdc-sm-crypto.d.ts",
+    "test/vc-*.test.ts",
+    "test/vc-vector-fixture.ts",
+    "test/vc-mock-platform.ts",
+    "sample/holder.ts",
+    "sample/verifier.ts",
+    "sample/holder-files.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,11 +1,20 @@
 ﻿import { randomBytes } from "node:crypto"
 
-import { BifProvider, BifSigner, buildContractInvoke, type Operation } from "@caict-bif/bif-typescript-sdk"
+import { BifApiError, BifProvider, BifSigner, buildContractInvoke, type Operation } from "@caict-bif/bif-typescript-sdk"
 import { BopInterface, Config, ProviderByBop, SignerByBop } from "@caict-bif/bop-typescript-sdk"
 
 import { transactionIdSchema, type TransactionOptions, type TransactionId } from "./domain.js"
 import { TransactionSubmissionError } from "./errors.js"
 import { resolveTransactionOptions, type ResolvedTransactionOptions } from "./contracts.js"
+import {
+  confirmTransaction,
+  DEFAULT_CONFIRM_OPTIONS,
+  findTransaction,
+  type ConfirmOptions,
+  type TransactionState,
+} from "./transaction-confirmation.js"
+
+export type { ConfirmOptions, TransactionState } from "./transaction-confirmation.js"
 
 export type DirectNetworkConfig = {
   readonly nodeUrl: string
@@ -24,12 +33,6 @@ export type SubmissionOutcome =
   | { readonly status: "ok"; readonly hash: TransactionId }
   | { readonly status: "submitted"; readonly hash: TransactionId }
   | { readonly status: "pending"; readonly hash: TransactionId; readonly hint: string }
-
-/** 链上交易状态。 */
-export type TransactionState =
-  | { readonly kind: "confirmed"; readonly errorCode: number; readonly errorDesc: string }
-  | { readonly kind: "pooled" }
-  | { readonly kind: "unknown" }
 
 /** 写链统一入口：把编码好的合约 input 提交到链上，并在 3s 内确认结果。 */
 export interface ChainWriter {
@@ -54,6 +57,9 @@ export type DirectSdk = {
   createSigner(privateKey: string): DirectSigner
   buildContractInvoke(input: { readonly contractAddress: string; readonly amount: number; readonly input: string }): Operation
   getTransactionState(hash: string): Promise<TransactionState>
+  getAccountMetadata(address: string, key: string): Promise<unknown>
+  /** 合约只读调用（opt_type=2），返回规范化的 queryRets。 */
+  queryContract(input: { readonly contractAddress: string; readonly input: string }): Promise<ContractQueryResult>
 }
 
 export type DirectSigner = {
@@ -61,13 +67,6 @@ export type DirectSigner = {
   getLedgerNumber(): Promise<number>
   sendTransaction(transaction: DirectTransactionRequest): Promise<{ readonly hash?: string; readonly errorCode: number; readonly errorDescription: string }>
 }
-
-export type ConfirmOptions = {
-  readonly timeoutMs?: number
-  readonly intervalMs?: number
-}
-
-const DEFAULT_CONFIRM_OPTIONS = { timeoutMs: 3_000, intervalMs: 500 } as const
 
 export class DirectBidWriter implements ChainWriter {
   readonly transport = "direct" as const
@@ -136,6 +135,24 @@ export function createDirectSdk(config: DirectNetworkConfig): DirectSdk {
       }
     },
     buildContractInvoke,
+    // 底层 unwrapResult 对 result:null 抛 BifApiError(0,"missing result...")，
+    // 对直连 metadata 查询，result:null 表示该 key 未命中，视为空结果返回而不是抛错。
+    async getAccountMetadata(address: string, key: string): Promise<unknown> {
+      try {
+        return await provider.account.getAccountMetaData(address, key)
+      } catch (error) {
+        if (error instanceof BifApiError && error.code === 0) return null
+        throw error
+      }
+    },
+    async queryContract(input): Promise<ContractQueryResult> {
+      const response = await provider.contract.callContract({
+        contract_address: input.contractAddress,
+        input: input.input,
+        opt_type: 2,
+      })
+      return normalizeQueryRets(response)
+    },
     async getTransactionState(hash): Promise<TransactionState> {
       // 交易刚提交未打包时，直连节点对历史/缓存池查询会返回“结果不存在”错误，
       // 这里按“未确认”处理，交给上层继续轮询。
@@ -169,6 +186,43 @@ export type BopSdk = {
   buildContractInvoke(input: { readonly contractAddress: string; readonly payload: string; readonly transaction: ResolvedTransactionOptions }): Promise<BopOfflineTransaction>
   submitTransaction(transaction: BopOfflineTransaction): Promise<{ readonly hash?: string; readonly errorCode: number; readonly errorDescription: string }>
   getTransactionState(hash: string): Promise<TransactionState>
+  getAccountMetadata(address: string, key: string): Promise<unknown>
+  /** 合约只读调用（opt_type=2），返回规范化的 queryRets。 */
+  queryContract(input: { readonly contractAddress: string; readonly input: string }): Promise<ContractQueryResult>
+}
+
+/** 契约查询结果统一形态（JS 合约）：queryRets[].result.value 为返回的 JSON 字符串。 */
+export type ContractQueryResult = {
+  readonly queryRets: readonly {
+    readonly error?: { readonly data?: string }
+    readonly result?: { readonly value?: string }
+  }[]
+}
+
+function normalizeQueryRets(raw: unknown): ContractQueryResult {
+  if (typeof raw !== "object" || raw === null) return { queryRets: [] }
+  const record = raw as Readonly<Record<string, unknown>>
+  // 直连节点返回 query_rets（snake），BOP 返回 queryRets（camel）。
+  const queryRets = Array.isArray(record["queryRets"]) ? record["queryRets"] : record["query_rets"]
+  if (!Array.isArray(queryRets)) return { queryRets: [] }
+  return {
+    queryRets: queryRets.map((entry) => {
+      if (typeof entry !== "object" || entry === null) return {}
+      const entryRecord = entry as Readonly<Record<string, unknown>>
+      const error = typeof entryRecord["error"] === "object" && entryRecord["error"] !== null
+        ? (entryRecord["error"] as Readonly<Record<string, unknown>>)
+        : undefined
+      const result = typeof entryRecord["result"] === "object" && entryRecord["result"] !== null
+        ? (entryRecord["result"] as Readonly<Record<string, unknown>>)
+        : undefined
+      const errorData = error?.["data"]
+      const resultValue = result?.["value"]
+      return {
+        ...(errorData === undefined ? {} : { error: { data: typeof errorData === "string" ? errorData : JSON.stringify(errorData) } }),
+        ...(typeof resultValue !== "string" ? {} : { result: { value: resultValue } }),
+      }
+    }),
+  }
 }
 
 export class BopBidWriter implements ChainWriter {
@@ -249,54 +303,16 @@ export function createBopSdk(config: BopNetworkConfig): BopSdk {
       if (pooled !== undefined) return { kind: "pooled" }
       return { kind: "unknown" }
     },
+    getAccountMetadata: (address, key) => provider.account.getAccountMetadata(address, undefined, key),
+    async queryContract(input): Promise<ContractQueryResult> {
+      const response = await provider.contract.callContract({
+        contractAddress: input.contractAddress,
+        input: input.input,
+        optType: 2,
+      })
+      return normalizeQueryRets(response.result)
+    },
   }
-}
-
-// ---------- 提交确认 ----------
-
-/** 提交后轮询（查交易记录与缓存池），确认成功/失败；超时返回 pending 并提示用 hash 去浏览器核实。 */
-async function confirmTransaction(
-  transport: "direct" | "bop",
-  hash: TransactionId,
-  getState: () => Promise<TransactionState>,
-  options: Required<ConfirmOptions>,
-): Promise<SubmissionOutcome> {
-  const deadline = Date.now() + options.timeoutMs
-  while (true) {
-    const state = await getState()
-    if (state.kind === "confirmed") {
-      if (state.errorCode !== 0) throw new TransactionSubmissionError(transport, state.errorDesc === "" ? `transaction ${hash} failed on chain` : state.errorDesc)
-      return { status: "ok", hash }
-    }
-    if (Date.now() >= deadline) {
-      return {
-        status: "pending",
-        hash,
-        hint: `交易 ${hash} 已提交，但 ${options.timeoutMs}ms 内未在链上确认，可能仍在交易池处理中。请使用该 hash 在区块链浏览器查询最终结果。`,
-      }
-    }
-    await sleep(options.intervalMs)
-  }
-}
-
-function sleep(ms: number): Promise<void> { return new Promise((resolve) => { setTimeout(resolve, ms) }) }
-
-function isRecordArray(value: unknown): value is Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) return false
-  return value.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))
-}
-
-/** 在直连节点返回的交易列表（snake_case）中查找 hash，并读取执行结果。 */
-function findTransaction(value: unknown, hash: string): TransactionState | undefined {
-  if (!isRecordArray(value)) return undefined
-  for (const item of value) {
-    if (item["hash"] !== hash) continue
-    const errorCode = item["error_code"] ?? item["errorCode"]
-    const errorDesc = item["error_desc"] ?? item["errorDesc"]
-    const code = typeof errorCode === "number" ? errorCode : typeof errorCode === "string" ? Number(errorCode) : -1
-    return { kind: "confirmed", errorCode: code, errorDesc: typeof errorDesc === "string" ? errorDesc : "" }
-  }
-  return undefined
 }
 
 // ---------- 随机 nonce ----------

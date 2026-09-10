@@ -79,8 +79,14 @@ class FakeDirectSdk implements DirectSdk {
     return { type: 7, pay_coin: {} }
   }
 
+  async queryContract(): Promise<import("../src/chain.js").ContractQueryResult> {
+    return { queryRets: [] }
+  }
+
   async getTransactionState(): Promise<TransactionState> {
     this.stateQueries += 1
     return this.state
   }
+
+  async getAccountMetadata(): Promise<unknown> { return {} }
 }
