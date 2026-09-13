@@ -2,20 +2,22 @@ import { readFile } from "node:fs/promises"
 
 import { z } from "zod"
 
+import { configureBidSdk, createBidSdk } from "../src/index.js"
 import { verifyPresentationConsistency } from "../src/vc/vc-presentation.js"
-import { createDirectVcVerifier } from "../src/vc/mobile.js"
 
 /**
- * 本地验证方示例 CLI。
- * 用法：npm run sample:verifier -- --file=sample/output/holder-presentation.json
+ * 本地验证方示例 CLI（开放平台 BOP 版）。
+ * 用法：npm run sample:verifier-bop -- --file=sample/output/holder-presentation.json
+ *
+ * 与直连版 verifier.ts 使用同一套本地核验逻辑（format/issuerTrust/issuerSignature/
+ * validity/disclosure/revocation 与 verified 判定共用同一实现），区别仅在传输层：
+ * 本 sample 通过开放平台（BOP）查询 IAM/TDS 信任与 DDO 合约中的 issuer DID 公钥，
+ * 撤销状态仍查询发证方平台地址（VC_REVOCATION_BASE_URL）。
  *
  * 输入可以是：
  *  - 标准 VC 信封 JSON（export 输出，如 holder-presentation.json），从中读取 proof.jwt；
  *  - 三段式 compact JWS 文本文件（holder-credential-<id>.jws）。
  * 不从环境变量读取凭证、私钥或 issuer 公钥。
- * 使用轻量跨平台核验入口 createDirectVcVerifier：进度契约与 SDK facade 的 verifyCredential 一致
- * （format/issuerTrust/issuerSignature/validity/disclosure/revocation 与 verified 判定逻辑共用同一套实现）。
- * 直连节点查询 IAM/TDS 与 DDO 合约中的 issuer DID；撤销状态查询发证方平台地址（VC_REVOCATION_BASE_URL）。
  * 撤销检查是在线 issuer-service 状态，不是独立的链上状态证明。
  */
 
@@ -26,9 +28,9 @@ const presentationEnvelopeSchema = z.object({
 }).passthrough()
 
 function printHelp(): void {
-  console.error("用法：npm run sample:verifier -- --file=<holder-presentation.json|holder-credential-<id>.jws>")
-  console.error("配置：在 .env.verifier 设置 BID_DIRECT_NODE_URL 和 VC_REVOCATION_BASE_URL；保持默认 TLS 校验。")
-  console.error("本地验证通过直连节点查询 IAM/TDS 和 DDO 合约中的 issuer DID 公钥；撤销状态查询发证方平台地址。")
+  console.error("用法：npm run sample:verifier-bop -- --file=<holder-presentation.json|holder-credential-<id>.jws>")
+  console.error("配置：在 .env.verifier 设置 BID_BOP_URL、BID_BOP_API_KEY、BID_BOP_API_SECRET 与 VC_REVOCATION_BASE_URL；保持默认 TLS 校验。")
+  console.error("本地验证通过开放平台查询 IAM/TDS 和 DDO 合约中的 issuer DID 公钥；撤销状态查询发证方平台地址。")
   console.error("注意：撤销检查是在线 issuer-service 状态，不是独立的链上状态证明。")
 }
 
@@ -43,16 +45,21 @@ function parseFilePath(argv: readonly string[]): string | undefined {
   return filePath
 }
 
-function requireVerifierUrls(): { readonly directNodeUrl: string; readonly vcRevocationUrl: string } {
-  const directNodeUrl = process.env["BID_DIRECT_NODE_URL"]
+function requireConfig(): { readonly bopUrl: string; readonly apiKey: string; readonly apiSecret: string; readonly vcRevocationUrl: string } {
+  const bopUrl = process.env["BID_BOP_URL"]
+  const apiKey = process.env["BID_BOP_API_KEY"]
+  const apiSecret = process.env["BID_BOP_API_SECRET"] ?? ""
   const vcRevocationUrl = process.env["VC_REVOCATION_BASE_URL"]
-  if (directNodeUrl === undefined || directNodeUrl === "") {
-    throw new Error("缺少 BID_DIRECT_NODE_URL：请在 .env.verifier 中填写直连节点 HTTPS 地址")
+  if (bopUrl === undefined || bopUrl === "") {
+    throw new Error("缺少 BID_BOP_URL：请在 .env.verifier 中填写开放平台 HTTPS 地址")
+  }
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error("缺少 BID_BOP_API_KEY：请在 .env.verifier 中填写开放平台 API Key")
   }
   if (vcRevocationUrl === undefined || vcRevocationUrl === "") {
     throw new Error("缺少 VC_REVOCATION_BASE_URL：请在 .env.verifier 中填写发证方平台地址")
   }
-  return { directNodeUrl, vcRevocationUrl }
+  return { bopUrl, apiKey, apiSecret, vcRevocationUrl }
 }
 
 type ExtractedInput = {
@@ -84,12 +91,18 @@ async function run(filePath: string): Promise<boolean> {
       return inconsistent.verified
     }
   }
-  const urls = requireVerifierUrls()
-  const verifier = createDirectVcVerifier({
-    directNodeUrl: urls.directNodeUrl,
-    vcRevocationUrl: urls.vcRevocationUrl,
+  const config = requireConfig()
+  configureBidSdk({
+    bopUrl: config.bopUrl,
+    vcRevocationUrl: config.vcRevocationUrl,
   })
-  const result = await verifier.verifyCredential({ jws: input.jws })
+  const sdk = createBidSdk()
+  sdk.connect({
+    mode: "bop",
+    apiKey: config.apiKey,
+    apiSecret: config.apiSecret,
+  })
+  const result = await sdk.vc.verifier.verifyCredential({ jws: input.jws })
   console.log(JSON.stringify({ verified: result.verified, checks: result.checks, errors: result.errors }, null, 2))
   return result.verified
 }
