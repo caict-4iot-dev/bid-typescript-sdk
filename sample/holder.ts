@@ -158,14 +158,31 @@ async function cmdList(options: Readonly<Record<string, string>>): Promise<void>
   console.log(JSON.stringify(list, null, 2))
 }
 
-function readSubject(options: Readonly<Record<string, string>>): Record<string, string | number | boolean> | undefined {
+function readSubject(options: Readonly<Record<string, string>>): Record<string, string | number | boolean> {
   const raw = readOption(options, "subject")
-  if (raw === undefined) return undefined
-  const parsed: unknown = JSON.parse(raw)
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("--subject 必须是 JSON 对象")
+  if (raw === undefined) {
+    console.error("缺少 --subject：该平台模板要求申请主体。")
+    console.error("格式（平台凭证模板通用 attributes 结构）：--subject='{\"attributes\":[{\"key\":\"name\",\"label\":\"姓名\",\"type\":\"3\",\"format\":\"String\",\"value\":\"张三\"}]}'")
+    console.error("注意：Windows PowerShell 下不要通过 npm run 传 JSON（引号会被剥掉），请直接执行 node --env-file=.env.holder --import tsx sample/holder.ts apply ...")
+    process.exit(1)
   }
-  return parsed as Record<string, string | number | boolean>
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    console.error("--subject 不是合法 JSON。若是 PowerShell/npm 剥掉了引号（如 {name:Alice}），请直接执行 node 命令，见上方说明。")
+    process.exit(1)
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    console.error("--subject 必须是 JSON 对象")
+    process.exit(1)
+  }
+  const record = parsed as Record<string, string | number | boolean>
+  if (Object.keys(record).length === 0) {
+    console.error("--subject 不能是空对象：平台模板要求具体申请字段（attributes 结构），空对象会让服务端构建凭证时崩溃。")
+    process.exit(1)
+  }
+  return record
 }
 
 async function cmdApply(options: Readonly<Record<string, string>>): Promise<void> {
@@ -183,7 +200,7 @@ async function cmdApply(options: Readonly<Record<string, string>>): Promise<void
   await holder.assertApplication(session, { templateId, ...(hold === undefined ? {} : { hold }) })
   const applyNo = await holder.applyCredential(session, {
     templateId,
-    ...(subject === undefined ? {} : { subject }),
+    subject,
   })
   const application = { applyNo, templateId, hold: hold === "1" ? 1 : 0, createdAt: new Date().toISOString() }
   const path = await writeApplication(application)
