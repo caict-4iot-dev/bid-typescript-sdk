@@ -12,8 +12,10 @@
     "test/vc-vector-fixture.ts",
     "test/vc-mock-platform.ts",
     "sample/holder.ts",
+    "sample/holder-files.ts",
+    "sample/issuer.ts",
+    "sample/issuer-files.ts",
     "sample/verifier.ts",
-    "sample/holder-files.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

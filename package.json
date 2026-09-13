@@ -1,10 +1,33 @@
 {
   "name": "@caict-bif/bid-typescript-sdk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "BID document SDK for Xinghuo BIF",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mobile": {
+      "types": "./dist/vc/mobile.d.ts",
+      "default": "./dist/vc/mobile.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.js"
+    },
+    "./vc": {
+      "types": "./dist/vc/index.d.ts",
+      "default": "./dist/vc/index.js"
+    },
+    "./dist/vc/mobile.js": {
+      "types": "./dist/vc/mobile.d.ts",
+      "default": "./dist/vc/mobile.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "README.md"
@@ -16,11 +39,13 @@
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/bid-document-builder.test.ts test/bid-sdk.test.ts test/direct-writer.test.ts test/keypair.test.ts test/payload.test.ts test/parser-reader.test.ts test/sdk-config.test.ts test/transaction-failure.test.ts test/transaction-options.test.ts",
-    "test:vc": "node --import tsx --test test/vc-jws.test.ts test/vc-platform-auth.test.ts test/vc-roles.test.ts test/vc-verifier.test.ts test/vc-local-protocol.test.ts test/vc-trust.test.ts test/vc-disclosure.test.ts test/vc-flow.test.ts test/vc-interop-vector.test.ts",
+    "test:vc": "node --import tsx --test test/vc-jws.test.ts test/vc-platform-auth.test.ts test/vc-roles.test.ts test/vc-verifier.test.ts test/vc-local-protocol.test.ts test/vc-trust.test.ts test/vc-disclosure.test.ts test/vc-flow.test.ts test/vc-interop-vector.test.ts test/vc-mobile.test.ts test/vc-presentation.test.ts",
     "typecheck:vc": "tsc --project tsconfig.vc.json",
     "check:vc": "npm run typecheck:vc && npm run test:vc",
     "sample:holder": "node --env-file=.env.holder --import tsx sample/holder.ts",
+    "sample:issuer": "node --env-file-if-exists=.env.issuer --import tsx sample/issuer.ts",
     "sample:verifier": "node --env-file-if-exists=.env.verifier --import tsx sample/verifier.ts",
+    "sample:verifier-bop": "node --env-file-if-exists=.env.verifier --import tsx sample/verifier-bop.ts",
     "sample": "node --env-file=.env --import tsx sample/usage.ts",
     "check": "npm run typecheck && npm test"
   },
