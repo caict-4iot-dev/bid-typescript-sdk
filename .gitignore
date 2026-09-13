@@ -8,12 +8,13 @@ AGENTS.md
 !.env.example
 !.env.holder.example
 !.env.verifier.example
+!.env.issuer.example
 
-# ????????
+# 编辑器与 IDE
 .idea/
 .vscode/
 
-# AI ????
+# AI 工具本地目录
 .opencode/
 .codex/
 .cursor/
@@ -21,12 +22,13 @@ AGENTS.md
 .codegraph/
 .playwright-mcp/
 
-# Local design drafts
-docs/vc-sdk-design.md
-docs/ed25519-vc-upgrade-todo.md
+# docs 只保留 api-reference.md，其余为本地工作文档
+docs/*
+!docs/api-reference.md
 
-# ?????????????????
+# sample 只保留三个角色入口（holder/issuer/verifier），其余为本地文件
 sample/*.local.ts
+sample/config.ts
 
 # sample 运行时生成的本地文件（身份/申请/凭证）
 sample/output/
