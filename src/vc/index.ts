@@ -1,11 +1,18 @@
 import { BidConfigurationError } from "../errors.js"
-import { createEncSigner, type VcSigner } from "./vc-crypto.js"
+import { createEncSigner } from "./vc-crypto.js"
+import type { VcSigner } from "./vc-crypto.js"
+export { createEncSigner }
 import { VcHolder } from "./vc-holder.js"
 import { VcIssuer } from "./vc-issuer.js"
 import { VcPlatformClient, type VcPlatformConfig } from "./vc-platform.js"
 import type { VerificationResult } from "./vc-domain.js"
 import { LocalVcVerifier, RemoteVcVerifier, type PlatformVerifierOptions, type PlatformVerifyCredentialInput, type VerifyCredentialInput } from "./vc-verifier.js"
 import type { IssuerPublicKeySource, IssuerTrustReader } from "./vc-trust.js"
+import { parseApplyNo, parseCredentialId, parseTemplateId, vcPayloadSchema, type VcPayload } from "./vc-domain.js"
+import { parseJws } from "./vc-jws.js"
+
+export { parseApplyNo, parseCredentialId, parseTemplateId, parseJws, vcPayloadSchema }
+export type { VerificationResult, VcPayload }
 
 export type VcOperations = {
   readonly signer: {

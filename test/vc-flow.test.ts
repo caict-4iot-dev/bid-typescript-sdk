@@ -41,8 +41,8 @@ test("Given holder issuer and verifier roles, when they complete the mock VC flo
   await holder.getTemplate(holderSession, { templateId: "template-identity" })
   await holder.assertApplication(holderSession, { templateId: "template-identity" })
   const applyNo = await holder.applyCredential(holderSession, { templateId: "template-identity", subject: { name: "Alice" } })
-  await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
-  await issuer.issue({ issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 1 })
+  const issuerSession = await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
+  await issuer.issue(issuerSession, { issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 2 })
   const downloaded = await holder.downloadCredential(holderSession, { credentialId: parseCredentialId("credential-1") })
 
   const localResult = await vc.verifier.verifyCredential({
@@ -61,7 +61,7 @@ test("Given holder issuer and verifier roles, when they complete the mock VC flo
   assert.equal(remoteResult.verified, false)
   assert.equal(remoteResult.checks.issuerSignature, "passed")
   assert.equal(remoteResult.checks.disclosure, "skipped")
-  await issuer.revoke({ issuer: { bid: issuerSigner.address, signer: issuerSigner }, credentialBid: "credential-1", txHash: "mock-tx", blob: "mock-revoke" })
+  await issuer.revoke(issuerSession, { issuer: { bid: issuerSigner.address, signer: issuerSigner }, credentialBid: "credential-1" })
   const status = await holder.getApplicationStatus(holderSession, applyNo)
   assert.equal(status.status, "2")
 })
@@ -81,13 +81,14 @@ test("Given ED25519 holder and issuer, when they complete a direct mock VC flow,
 
   const holderSession = await holderPlatform.login({ bid: holderSigner.address, signer: holderSigner })
   const applyNo = await holder.applyCredential(holderSession, { templateId: "template-identity", subject: { name: "Alice" } })
-  await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
-  const issued = await issuer.issue({ issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 1 })
+  const issuerSession = await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
+  const issued = await issuer.issue(issuerSession, { issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 2 })
   const downloaded = await holder.downloadCredential(holderSession, { credentialId: parseCredentialId("credential-1") })
 
   const parsed = parseJws(downloaded.jws)
   assert.equal(readJwsAlgorithm(parsed), "ED25519")
   assert.equal(issued.payloadId, "payload-1")
+  assert.equal(issued.credentialId, "credential-1")
   const localResult = await vc.verifier.verifyCredential({
     jws: downloaded.jws,
     issuerPublicKeys: [issuerSigner.publicKey],
@@ -110,8 +111,8 @@ test("Given an ED25519 issuer, when issuing with selective disclosure, then the 
 
   const holderSession = await holderPlatform.login({ bid: holderSigner.address, signer: holderSigner })
   const applyNo = await holder.applyCredential(holderSession, { templateId: "template-identity", subject: { name: "Alice" } })
-  await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
-  await issuer.issue({ issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 1, isSel: 1 })
+  const issuerSession = await issuerPlatform.login({ bid: issuerSigner.address, signer: issuerSigner })
+  await issuer.issue(issuerSession, { issuer: { bid: issuerSigner.address, signer: issuerSigner }, applyNo, status: 2, isSel: 1 })
   const downloaded = await holder.downloadCredential(holderSession, { credentialId: parseCredentialId("credential-1") })
 
   const parsed = parseJws(downloaded.jws)

@@ -173,38 +173,52 @@ test("Given an authenticated owner-list response with duplicate application rows
   )
 })
 
-test("Given an issuer, when issuing and revoking, then it signs each platform-provided blob after validating the returned JWS header", async () => {
+test("Given a logged-in issuer, when issuing and revoking, then it signs each platform-provided blob after validating the returned JWS header and carries the access token", async () => {
   const keypair = enc.getBidAndKeyPairBySM2()
   const signer = createEncSigner(keypair.encPrivateKey)
   const submitted: Readonly<Record<string, unknown>>[] = []
   const blobBodies: Readonly<Record<string, unknown>>[] = []
+  const sawTokenOn: string[] = []
   const blobPayload = `${encodeJsonPart({ alg: "SM2" })}.${encodeJsonPart({ hello: "world" })}`
   const platform = new VcPlatformClient({
     fetcher: async (input, init) => {
       const url = String(input)
       const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Readonly<Record<string, unknown>>
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
+      if (new Headers(init?.headers).get("accessToken") === "issuer-token") sawTokenOn.push(url)
       if (url.endsWith("/vc/issue/audit/blob")) {
         blobBodies.push(body)
         return json({ errorCode: 0, message: "ok", data: { payload: blobPayload, payloadId: "payload-1", bcTxBlob: "7472616e73616374696f6e" } })
+      }
+      if (url.endsWith("/vc/issue/audit/submit")) {
+        submitted.push(body)
+        return json({ errorCode: 0, message: "ok", data: { certBid: "did:bid:efCredentialIssued", bid: "did:bid:efHolder", trustedFlag: false } })
       }
       if (url.endsWith("/vc/revocation/blob")) return json({ errorCode: 0, message: "ok", data: { blobId: "revoke-1", blob: "7265766f6b65", txHash: "" } })
       submitted.push(body)
       return json({ errorCode: 0, message: "ok", data: {} })
     },
   })
+  const session = await platform.login({ bid: signer.address, signer })
   const issuer = new VcIssuer(platform)
 
-  await issuer.issue({ issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 1 })
-  await issuer.revoke({ issuer: { bid: signer.address, signer }, credentialBid: "did:bid:efCredential", txHash: "hash", blob: "request-blob" })
+  const issued = await issuer.issue(session, { issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 2 })
+  await issuer.revoke(session, { issuer: { bid: signer.address, signer }, credentialBid: "did:bid:efCredentialIssued" })
 
+  assert.equal(issued.credentialId, "did:bid:efCredentialIssued")
   assert.equal(blobBodies[0]?.["alg"], "SM2")
   assert.equal(submitted.length, 2)
   assert.equal(enc.verify(signingMessageHex(blobPayload), String(submitted[0]?.["signPayload"]), signer.publicKey), true)
   assert.equal(enc.verify("7472616e73616374696f6e", String(submitted[0]?.["signBcTxBlob"]), signer.publicKey), true)
   assert.equal(enc.verify("7265766f6b65", String(submitted[1]?.["signBlob"]), signer.publicKey), true)
+  // 所有 issuer 业务请求都必须带 accessToken（服务端校验登录态）。
+  for (const route of ["/vc/issue/audit/blob", "/vc/issue/audit/submit", "/vc/revocation/blob"]) {
+    assert.equal(sawTokenOn.some((url) => url.endsWith(route)), true, `missing accessToken on ${route}`)
+  }
 })
 
-test("Given an ED25519 issuer, when issuing, then it requests the signer algorithm and submits ED25519-verifiable signatures", async () => {
+test("Given a logged-in ED25519 issuer, when issuing, then it requests the signer algorithm and submits ED25519-verifiable signatures", async () => {
   const keypair = enc.generate()
   const signer = createEncSigner(keypair.encPrivateKey)
   assert.equal(signer.algorithm, "ED25519")
@@ -215,17 +229,20 @@ test("Given an ED25519 issuer, when issuing, then it requests the signer algorit
     fetcher: async (input, init) => {
       const url = String(input)
       const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Readonly<Record<string, unknown>>
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
       if (url.endsWith("/vc/issue/audit/blob")) {
         blobBodies.push(body)
         return json({ errorCode: 0, message: "ok", data: { payload: blobPayload, payloadId: "payload-1", bcTxBlob: "7472616e73616374696f6e" } })
       }
       submitted.push(body)
-      return json({ errorCode: 0, message: "ok", data: {} })
+      return json({ errorCode: 0, message: "ok", data: { certBid: "did:bid:efCredentialIssued" } })
     },
   })
+  const session = await platform.login({ bid: signer.address, signer })
   const issuer = new VcIssuer(platform)
 
-  await issuer.issue({ issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 1 })
+  await issuer.issue(session, { issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 2 })
 
   assert.equal(blobBodies[0]?.["alg"], "ED25519")
   assert.equal(submitted.length, 1)
@@ -233,31 +250,129 @@ test("Given an ED25519 issuer, when issuing, then it requests the signer algorit
   assert.equal(enc.verify("7472616e73616374696f6e", String(submitted[0]?.["signBcTxBlob"]), signer.publicKey), true)
 })
 
-test("Given an ED25519 issuer, when the platform returns a blob whose JWS header alg does not match, then it rejects before signing or submitting", async () => {
+test("Given a logged-in ED25519 issuer, when the portal blob hex-encodes the payload and the JWS header alg is hardcoded SM2, then it still signs and submits after decoding", async () => {
   const keypair = enc.generate()
   const signer = createEncSigner(keypair.encPrivateKey)
+  assert.equal(signer.algorithm, "ED25519")
+  const blobPayload = `${encodeJsonPart({ alg: "SM2" })}.${encodeJsonPart({ hello: "world" })}`
+  const hexPayload = Buffer.from(blobPayload, "utf8").toString("hex")
   const suppliedBodies: Readonly<Record<string, unknown>>[] = []
   const submitCalls: Readonly<Record<string, unknown>>[] = []
   const platform = new VcPlatformClient({
     fetcher: async (input, init) => {
       const url = String(input)
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
       if (url.endsWith("/vc/issue/audit/blob")) {
         suppliedBodies.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Readonly<Record<string, unknown>>)
-        return json({ errorCode: 0, message: "ok", data: { payload: `${encodeJsonPart({ alg: "SM2" })}.${encodeJsonPart({ hello: "world" })}`, payloadId: "payload-1", bcTxBlob: "7472616e73616374696f6e" } })
+        return json({ errorCode: 0, message: "ok", data: { payload: hexPayload, payloadId: "payload-1", bcTxBlob: "7472616e73616374696f6e" } })
       }
       submitCalls.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Readonly<Record<string, unknown>>)
+      return json({ errorCode: 0, message: "ok", data: { certBid: "did:bid:efHexCredential" } })
+    },
+  })
+  const session = await platform.login({ bid: signer.address, signer })
+  const issuer = new VcIssuer(platform)
+
+  // 服务端把 header alg 写死 SM2（历史缺陷，与实际签名算法无关），SDK 不做等值拦截。
+  const issued = await issuer.issue(session, { issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 2 })
+
+  assert.equal(suppliedBodies[0]?.["alg"], "ED25519")
+  assert.equal(issued.credentialId, "did:bid:efHexCredential")
+  // 签名的是 hex 解码后的原始 JWS 文本。
+  assert.equal(enc.verify(signingMessageHex(blobPayload), String(submitCalls[0]?.["signPayload"]), signer.publicKey), true)
+})
+
+test("Given a logged-in issuer, when rejecting, listing and creating templates, then each platform request carries the session and issuer identity", async () => {
+  const keypair = enc.getBidAndKeyPairBySM2()
+  const signer = createEncSigner(keypair.encPrivateKey)
+  const requests: { readonly url: string; readonly body: Readonly<Record<string, unknown>>; readonly token: string | null }[] = []
+  const platform = new VcPlatformClient({
+    fetcher: async (input, init) => {
+      const url = String(input)
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Readonly<Record<string, unknown>>
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
+      requests.push({ url, body, token: new Headers(init?.headers).get("accessToken") })
+      if (url.endsWith("/vc/audit/disApprove")) return json({ errorCode: 0, message: "ok", data: {} })
+      if (url.endsWith("/vc/list")) return json({ errorCode: 0, message: "ok", data: { dataList: [], page: { pageStart: 1, pageSize: 10, pageTotal: 0 } } })
+      if (url.endsWith("/vc/detail")) return json({ errorCode: 0, message: "ok", data: { applyNo: "apply-1", content: "{\"name\":\"Alice\"}", status: "1" } })
+      if (url.endsWith("/vc/create/template/blob")) return json({ errorCode: 0, message: "ok", data: { blobId: "tpl-1", blob: "74656d706c6174652d626c6f62" } })
+      if (url.endsWith("/vc/create/template/submit")) return json({ errorCode: 0, message: "ok", data: { templateBid: "did:bid:efTemplate0000000000000001" } })
+      if (url.endsWith("/vc/manage/template/list")) return json({ errorCode: 0, message: "ok", data: { list: [], page: { pageStart: 1, pageSize: 10, pageTotal: 0 } } })
+      if (url.endsWith("/vc/industry/list")) return json({ errorCode: 0, message: "ok", data: { list: [{ code: "A", name: "政务" }] } })
+      if (url.endsWith("/vc/category/list")) return json({ errorCode: 0, message: "ok", data: { list: [{ issuCategoId: "1", issuCategoName: "身份" }] } })
+      throw new Error(`unexpected url ${url}`)
+    },
+  })
+  const session = await platform.login({ bid: signer.address, signer })
+  const issuer = new VcIssuer(platform)
+  const issuerId = { bid: signer.address, signer }
+
+  await issuer.reject(session, { issuer: issuerId, applyNo: parseApplyNo("apply-1"), reason: "材料不全" })
+  await issuer.listApplications(session, { status: [1], pageStart: 1, pageSize: 10 })
+  const detail = await issuer.getApplicationDetail(session, { applyNo: "apply-1" }) as Readonly<Record<string, unknown>>
+  const template = await issuer.createTemplate(session, {
+    issuer: issuerId,
+    name: "身份凭证",
+    industryId: "A",
+    categoryId: "1",
+    version: "1.0.0",
+    data: JSON.stringify([{ key: "name", label: "姓名", format: "String", type: "3" }]),
+    userType: "0",
+  })
+  await issuer.listTemplates(session, { pageStart: 1, pageSize: 10 })
+  await issuer.listIndustries(session)
+  await issuer.listCategories(session)
+
+  const byRoute = (suffix: string) => requests.filter((request) => request.url.endsWith(suffix))
+  // 拒绝：disApprove 带 applyNo/status=3/auditBid 与 alg。
+  const rejectBody = byRoute("/vc/audit/disApprove")[0]?.body
+  assert.equal(rejectBody?.["applyNo"], "apply-1")
+  assert.equal(rejectBody?.["status"], 3)
+  assert.equal(rejectBody?.["auditBid"], signer.address)
+  assert.equal(rejectBody?.["alg"], "SM2")
+  // 申请列表：issuerBid 来自登录会话。
+  assert.equal(byRoute("/vc/list")[0]?.body["issuerBid"], signer.address)
+  assert.deepEqual(byRoute("/vc/list")[0]?.body["status"], [1])
+  // 申请详情返回原始 content，供 approve 透传。
+  assert.equal(detail["content"], JSON.stringify({ name: "Alice" }))
+  // 创建模板两步都带 issuerBid / 签名 publicKey；submit 返回 templateBid。
+  assert.equal(byRoute("/vc/create/template/blob")[0]?.body["issuerBid"], signer.address)
+  assert.equal(template.templateBid, "did:bid:efTemplate0000000000000001")
+  const submitBody = byRoute("/vc/create/template/submit")[0]?.body
+  assert.equal(submitBody?.["blobId"], "tpl-1")
+  assert.equal(enc.verify(signingMessageHex("74656d706c6174652d626c6f62"), String(submitBody?.["signBlob"]), signer.publicKey), true)
+  // 模板列表带 issuerBid；字典查询不带业务参数。
+  assert.equal(byRoute("/vc/manage/template/list")[0]?.body["issuerBid"], signer.address)
+  assert.equal(byRoute("/vc/industry/list").length, 1)
+  // 全部 issuer 业务请求带 accessToken。
+  assert.equal(requests.every((request) => request.token === "issuer-token"), true)
+})
+
+test("Given an issuer whose signer does not match the login session, when issuing, then it rejects before calling the platform", async () => {
+  const loginKeypair = enc.getBidAndKeyPairBySM2()
+  const otherKeypair = enc.getBidAndKeyPairBySM2()
+  const loginSigner = createEncSigner(loginKeypair.encPrivateKey)
+  const otherSigner = createEncSigner(otherKeypair.encPrivateKey)
+  let businessCalls = 0
+  const platform = new VcPlatformClient({
+    fetcher: async (input) => {
+      const url = String(input)
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
+      businessCalls += 1
       return json({ errorCode: 0, message: "ok", data: {} })
     },
   })
+  const session = await platform.login({ bid: loginSigner.address, signer: loginSigner })
   const issuer = new VcIssuer(platform)
 
   await assert.rejects(
-    issuer.issue({ issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 1 }),
-    /does not match/,
+    issuer.issue(session, { issuer: { bid: otherSigner.address, signer: otherSigner }, applyNo: parseApplyNo("apply-1"), status: 2 }),
+    /session bid/,
   )
-
-  assert.equal(suppliedBodies[0]?.["alg"], "ED25519")
-  assert.equal(submitCalls.length, 0)
+  assert.equal(businessCalls, 0)
 })
 
 function json(value: unknown): Response {

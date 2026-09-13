@@ -9,7 +9,7 @@ import { parseApplyNo } from "../src/vc/vc-domain.js"
 import { VcHolder } from "../src/vc/vc-holder.js"
 import { VcIssuer } from "../src/vc/vc-issuer.js"
 import { encodeJsonPart } from "../src/vc/vc-jws.js"
-import { VcPlatformClient } from "../src/vc/vc-platform.js"
+import { ISSUER_PORTAL_ROUTES, VcPlatformClient } from "../src/vc/vc-platform.js"
 
 configureBidSdk({ directNodeUrl: "https://node.example.com", bopUrl: "https://bop.example.com", parserUrl: "https://parser.example.com/bid/", vcPlatformUrl: "https://wallet.example.com", vcCredentialUrl: "https://credential.example.com", vcVerificationUrl: "https://cross.example.com" })
 
@@ -141,9 +141,129 @@ async function runPlatformFlow(urls: Parameters<typeof configureBidSdk>[0]): Pro
   const holder = new VcHolder(platform)
   await holder.listRecommendedCredentials(session, { pageStart: 1, pageSize: 10 })
   const issuer = new VcIssuer(platform)
-  await issuer.issue({ issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 1 })
+  await issuer.issue(session, { issuer: { bid: signer.address, signer }, applyNo: parseApplyNo("apply-1"), status: 2 })
   return requestedUrls
 }
+
+test("Given issuer business routes, when the issuer client calls them, then every business request goes to the credential host while login stays on the platform host", async () => {
+  const keypair = enc.getBidAndKeyPairBySM2()
+  const signer = createEncSigner(keypair.encPrivateKey)
+  const requestedUrls: string[] = []
+  const platform = new VcPlatformClient({
+    fetcher: async (input) => {
+      const url = String(input)
+      requestedUrls.push(url)
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
+      if (url.endsWith("/vc/create/template/blob")) return json({ errorCode: 0, message: "ok", data: { blobId: "tpl-1", blob: "626c6f62" } })
+      if (url.endsWith("/vc/create/template/submit")) return json({ errorCode: 0, message: "ok", data: { templateBid: "did:bid:efTemplate" } })
+      return json({ errorCode: 0, message: "ok", data: {} })
+    },
+  })
+  const session = await platform.login({ bid: signer.address, signer })
+  const issuer = new VcIssuer(platform)
+  const issuerId = { bid: signer.address, signer }
+
+  await issuer.reject(session, { issuer: issuerId, applyNo: parseApplyNo("apply-1") })
+  await issuer.listApplications(session, { pageStart: 1, pageSize: 10 })
+  await issuer.getApplicationDetail(session, { applyNo: "apply-1" })
+  await issuer.listTemplates(session, { pageStart: 1, pageSize: 10 })
+  await issuer.listIndustries(session)
+  await issuer.listCategories(session)
+  await issuer.createTemplate(session, { issuer: issuerId, name: "身份凭证", industryId: "A", categoryId: "1", version: "1.0.0", data: "[]", userType: "0" })
+
+  // 登录链路只打到平台主机（vcPlatformUrl）。
+  assert.deepEqual(requestedUrls.filter((url) => url.startsWith("https://wallet.example.com/")), [
+    "https://wallet.example.com/server/bid/auth/random",
+    "https://wallet.example.com/server/bid/auth",
+  ])
+  // 全部 issuer 业务路由（含新增 8 条）都打到凭证主机（vcCredentialUrl）。
+  assert.deepEqual(
+    requestedUrls.filter((url) => url.startsWith("https://credential.example.com/")).sort(),
+    [
+      "https://credential.example.com/server/vc/audit/disApprove",
+      "https://credential.example.com/server/vc/category/list",
+      "https://credential.example.com/server/vc/create/template/blob",
+      "https://credential.example.com/server/vc/create/template/submit",
+      "https://credential.example.com/server/vc/detail",
+      "https://credential.example.com/server/vc/industry/list",
+      "https://credential.example.com/server/vc/list",
+      "https://credential.example.com/server/vc/manage/template/list",
+    ],
+  )
+})
+
+test("Given a route override for a gateway deployment, when listing applications, then the request goes to the overridden path on the credential host", async () => {
+  const keypair = enc.getBidAndKeyPairBySM2()
+  const signer = createEncSigner(keypair.encPrivateKey)
+  let listUrl = ""
+  const platform = new VcPlatformClient({
+    routes: { applyList: "api/omp/credential/list" },
+    fetcher: async (input) => {
+      const url = String(input)
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "issuer-token" } })
+      listUrl = url
+      return json({ errorCode: 0, message: "ok", data: { dataList: [], page: { pageStart: 1, pageSize: 10, pageTotal: 0 } } })
+    },
+  })
+  const session = await platform.login({ bid: signer.address, signer })
+  const issuer = new VcIssuer(platform)
+
+  await issuer.listApplications(session, { pageStart: 1, pageSize: 10 })
+
+  assert.equal(listUrl, "https://credential.example.com/api/omp/credential/list")
+})
+
+test("Given the issuer portal routes, when logging in as the issuer portal, then it exchanges the wallet token for a gateway token on the credential host and retries failed sessions through both steps", async () => {
+  const keypair = enc.getBidAndKeyPairBySM2()
+  const signer = createEncSigner(keypair.encPrivateKey)
+  const requestedUrls: string[] = []
+  let gatewayToken = "gateway-token-1"
+  let firstListAttempt = true
+  const platform = new VcPlatformClient({
+    routes: ISSUER_PORTAL_ROUTES,
+    fetcher: async (input, init) => {
+      const url = String(input)
+      requestedUrls.push(url)
+      if (url.endsWith("/bid/auth/random")) return json({ errorCode: 0, message: "ok", data: { randomStr: "deadbeef" } })
+      if (url.endsWith("/bid/auth")) return json({ errorCode: 0, message: "ok", data: { accessToken: "wallet-jwt" } })
+      if (url.endsWith("/sp/user/login")) return json({ errorCode: 0, message: "ok", data: { accessToken: gatewayToken, expiresIn: 7200 } })
+      if (url.endsWith("/api/omp/credential/list")) {
+        // 第一次用旧网关令牌被网关拒（100003），重登（两步）换新令牌后成功。
+        if (firstListAttempt) {
+          firstListAttempt = false
+          gatewayToken = "gateway-token-2"
+          return json({ errorCode: 100003, message: "无效令牌", data: {} })
+        }
+        assert.equal(new Headers(init?.headers).get("accessToken"), "gateway-token-2")
+        return json({ errorCode: 0, message: "ok", data: { dataList: [], page: { pageStart: 1, pageSize: 10, pageTotal: 0 } } })
+      }
+      throw new Error(`unexpected url ${url}`)
+    },
+    shouldRetryOn: (errorCode) => errorCode === 100003 || errorCode === 401,
+  })
+  const issuer = new VcIssuer(platform)
+
+  const session = await platform.loginAsIssuerPortal({ bid: signer.address, signer })
+  assert.equal(session.accessToken, "gateway-token-1")
+
+  await issuer.listApplications(session, { pageStart: 1, pageSize: 10 })
+
+  // 登录两步在平台主机，令牌交换与业务在凭证主机。
+  assert.deepEqual(requestedUrls.filter((url) => url.startsWith("https://wallet.example.com/")), [
+    "https://wallet.example.com/server/bid/auth/random",
+    "https://wallet.example.com/server/bid/auth",
+    "https://wallet.example.com/server/bid/auth/random",
+    "https://wallet.example.com/server/bid/auth",
+  ])
+  assert.deepEqual(requestedUrls.filter((url) => url.startsWith("https://credential.example.com/")), [
+    "https://credential.example.com/api/omp/sp/user/login",
+    "https://credential.example.com/api/omp/credential/list",
+    "https://credential.example.com/api/omp/sp/user/login",
+    "https://credential.example.com/api/omp/credential/list",
+  ])
+})
 
 function json(value: unknown): Response {
   return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } })
