@@ -202,7 +202,7 @@ export type ContractQueryResult = {
 function normalizeQueryRets(raw: unknown): ContractQueryResult {
   if (typeof raw !== "object" || raw === null) return { queryRets: [] }
   const record = raw as Readonly<Record<string, unknown>>
-  // 直连节点返回 query_rets（snake），BOP 返回 queryRets（camel）。
+  // 直连节点返回 query_rets（snake），BOP SDK 返回 queryRets（camel）且内层 result 可能被 JSON.stringify 字符串化。
   const queryRets = Array.isArray(record["queryRets"]) ? record["queryRets"] : record["query_rets"]
   if (!Array.isArray(queryRets)) return { queryRets: [] }
   return {
@@ -212,17 +212,36 @@ function normalizeQueryRets(raw: unknown): ContractQueryResult {
       const error = typeof entryRecord["error"] === "object" && entryRecord["error"] !== null
         ? (entryRecord["error"] as Readonly<Record<string, unknown>>)
         : undefined
-      const result = typeof entryRecord["result"] === "object" && entryRecord["result"] !== null
-        ? (entryRecord["result"] as Readonly<Record<string, unknown>>)
-        : undefined
+      const result = entryRecord["result"]
       const errorData = error?.["data"]
-      const resultValue = result?.["value"]
+      const resultValue = resolveQueryResultValue(result)
       return {
         ...(errorData === undefined ? {} : { error: { data: typeof errorData === "string" ? errorData : JSON.stringify(errorData) } }),
-        ...(typeof resultValue !== "string" ? {} : { result: { value: resultValue } }),
+        ...(resultValue === undefined ? {} : { result: { value: resultValue } }),
       }
     }),
   }
+}
+
+/** BOP SDK 可能把 result 序列化成字符串（如 '{"type":"string","value":"..."}'）；这里统一取 value 字段。 */
+function resolveQueryResultValue(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    try {
+      const parsed: unknown = JSON.parse(result)
+      if (typeof parsed === "object" && parsed !== null) {
+        const value = (parsed as Readonly<Record<string, unknown>>)["value"]
+        return typeof value === "string" ? value : undefined
+      }
+    } catch {
+      return result
+    }
+    return undefined
+  }
+  if (typeof result === "object" && result !== null) {
+    const value = (result as Readonly<Record<string, unknown>>)["value"]
+    return typeof value === "string" ? value : undefined
+  }
+  return undefined
 }
 
 export class BopBidWriter implements ChainWriter {
@@ -247,7 +266,8 @@ export class BopBidWriter implements ChainWriter {
 }
 
 export function createBopSdk(config: BopNetworkConfig): BopSdk {
-  const provider = new ProviderByBop(new BopInterface(new Config(config.baseUrl, config.apiKey, config.apiSecret)))
+  const bopInterface = new BopInterface(new Config(config.baseUrl, config.apiKey, config.apiSecret))
+  const provider = new ProviderByBop(bopInterface)
   return {
     async ensureAccount(privateKey, transaction): Promise<void> {
       const signer = new SignerByBop(privateKey).connect(provider)
@@ -303,7 +323,22 @@ export function createBopSdk(config: BopNetworkConfig): BopSdk {
       if (pooled !== undefined) return { kind: "pooled" }
       return { kind: "unknown" }
     },
-    getAccountMetadata: (address, key) => provider.account.getAccountMetadata(address, undefined, key),
+    getAccountMetadata: async (address, key) => {
+      // BOP SDK 的 account.getAccountMetadata 走 base_getAccount（对 metadata 查询返回 9999/500）。
+      // 这里改用开平台底层 BaseService.getAccountMetaData（走 /getAccountMetaData 接口），
+      // 返回与直连同构的 result 映射（未命中为 null）。
+      const response = await bopInterface.getBaseService().getAccountMetaData({ address, key })
+      if (typeof response.errorCode === "number" && response.errorCode !== 0) {
+        throw new Error(typeof response.errorDesc === "string" ? response.errorDesc : `BOP getAccountMetaData failed with code ${response.errorCode}`)
+      }
+      if (response.result === undefined || response.result === null) return null
+      const result = response.result as Readonly<Record<string, unknown>>
+      const entries: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(result)) {
+        if (typeof v === "object" && v !== null) entries[k] = v
+      }
+      return entries
+    },
     async queryContract(input): Promise<ContractQueryResult> {
       const response = await provider.contract.callContract({
         contractAddress: input.contractAddress,

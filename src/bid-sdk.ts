@@ -10,7 +10,7 @@ import { bidKeypairOperations, type BidKeypairOperations } from "./keypair.js"
 import type { BidReader, ParserConfig } from "./parser.js"
 import { ParserBidReader } from "./parser.js"
 import { createVcOperationsController, type VcOperations } from "./vc/index.js"
-import { BopIssuerPublicKeySource, BopIssuerTrustReader, DirectIssuerPublicKeySource, DirectIssuerTrustReader, type IssuerPublicKeySource, type IssuerTrustReader } from "./vc/vc-trust.js"
+import { DirectIssuerPublicKeySource, DirectIssuerTrustReader, type IssuerPublicKeySource, type IssuerTrustReader } from "./vc/vc-trust.js"
 import { ddoContractIssuerDocumentReader } from "./vc/vc-local-protocol.js"
 import { DdoDocumentReader } from "./ddo-document.js"
 
@@ -74,8 +74,8 @@ export class BidSdk {
         const bopConfig: BopNetworkConfig = { baseUrl: urls.bopUrl, apiKey: config.apiKey, apiSecret: config.apiSecret }
         const bop = createBopSdk(bopConfig)
         this.writer = new BopBidWriter(BidContractAddresses.DDO, bop)
-        issuerTrust = new BopIssuerTrustReader({ get: bop.getAccountMetadata })
-        issuerPublicKeySource = new BopIssuerPublicKeySource({ get: bop.getAccountMetadata })
+        issuerTrust = new DirectIssuerTrustReader({ get: bop.getAccountMetadata })
+        issuerPublicKeySource = new DirectIssuerPublicKeySource({ get: bop.getAccountMetadata })
         contractQuery = (input) => bop.queryContract(input)
         break
       }

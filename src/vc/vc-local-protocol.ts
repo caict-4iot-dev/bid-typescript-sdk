@@ -1,7 +1,8 @@
 import { z } from "zod"
 
+import * as enc from "@caict-bif/bif-encryption"
+
 import { BidContractAddresses } from "../constants.js"
-import { bidKeypairOperations, type KeyAlgorithm } from "../keypair.js"
 import type { VerificationChecks } from "./vc-domain.js"
 
 const revocationEnvelopeSchema = z.object({
@@ -112,7 +113,8 @@ export function eligibleIssuerKeys(issuer: string, document: IssuerDidDocument):
     if (algorithm === undefined) return []
     try {
       // 公钥以各自声明的算法转换；SM2 验证失败后再用 ED25519 候选回退验证。
-      return [bidKeypairOperations.convert.toEncPublicKey(publicKey.publicKeyHex, algorithm)]
+      const cryptoType = algorithm === "SM2" ? enc.CRYPTO_SM2 : enc.CRYPTO_ED25519
+      return [enc.rawToEncPublicKey(publicKey.publicKeyHex, cryptoType)]
     } catch {
       return []
     }
@@ -155,7 +157,7 @@ function isIssuerControlledKey(
     && (authentication === undefined || authentication.includes(publicKey.id))
 }
 
-function normalizeKeyType(value: string): KeyAlgorithm | undefined {
+function normalizeKeyType(value: string): "SM2" | "ED25519" | undefined {
   const normalized = value.replaceAll("-", "").toUpperCase()
   if (normalized === "SM2") return "SM2"
   if (normalized === "ED25519") return "ED25519"
