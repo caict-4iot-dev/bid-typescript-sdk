@@ -13,6 +13,7 @@
     "test/vc-mock-platform.ts",
     "sample/holder.ts",
     "sample/holder-files.ts",
+    "sample/holder-template.ts",
     "sample/issuer.ts",
     "sample/issuer-files.ts",
     "sample/verifier.ts",

@@ -10,6 +10,7 @@ import {
   parseJws,
   vcPayloadSchema,
   type PlatformSession,
+  type TemplateDetailInput,
   type VcHolder,
   type VcSigner,
 } from "../src/index.js"
@@ -26,6 +27,7 @@ import {
   writeIdentity,
   writePresentation,
 } from "./holder-files.js"
+import { formatTemplateGuide } from "./holder-template.js"
 
 /**
  * 持证方示例 CLI。
@@ -34,7 +36,8 @@ import {
  * 命令：
  *   generate        生成持证方公私钥并保存身份文件
  *   list            查询可申请的普通凭证（type=2，持证方凭证）
- *   apply           申请凭证（assert + apply）
+ *   template        查询模板详情：申请字段与可复制的 --subject 示例
+ *   apply           申请凭证（templateDetail + assert + apply；缺 --subject 时打印字段指引后退出）
  *   status          查看申请进度
  *   download        下载已签发凭证
  *   export          导出凭证文件并打印绝对路径
@@ -158,11 +161,11 @@ async function cmdList(options: Readonly<Record<string, string>>): Promise<void>
   console.log(JSON.stringify(list, null, 2))
 }
 
-function readSubject(options: Readonly<Record<string, string>>): Record<string, string | number | boolean> {
+function readSubject(options: Readonly<Record<string, string>>, guide: string): Record<string, string | number | boolean> {
   const raw = readOption(options, "subject")
   if (raw === undefined) {
-    console.error("缺少 --subject：该平台模板要求申请主体。")
-    console.error("格式（平台凭证模板通用 attributes 结构）：--subject='{\"attributes\":[{\"key\":\"name\",\"label\":\"姓名\",\"type\":\"3\",\"format\":\"String\",\"value\":\"张三\"}]}'")
+    console.error("缺少 --subject：请按下方模板字段构造申请主体后重新执行 apply。")
+    console.error(guide)
     console.error("注意：Windows PowerShell 下不要通过 npm run 传 JSON（引号会被剥掉），请直接执行 node --env-file=.env.holder --import tsx sample/holder.ts apply ...")
     process.exit(1)
   }
@@ -185,6 +188,12 @@ function readSubject(options: Readonly<Record<string, string>>): Record<string, 
   return record
 }
 
+/** 登录后查询模板详情并生成申请指引（--lang 可选，透传平台语言参数）。 */
+async function fetchTemplateGuide(holder: VcHolder, session: PlatformSession, input: TemplateDetailInput): Promise<string> {
+  const detail = await holder.getTemplate(session, input)
+  return formatTemplateGuide(detail)
+}
+
 async function cmdApply(options: Readonly<Record<string, string>>): Promise<void> {
   printSection("申请凭证")
   const identity = await requireIdentity()
@@ -194,9 +203,13 @@ async function cmdApply(options: Readonly<Record<string, string>>): Promise<void
     process.exit(1)
   }
   const hold = readOption(options, "hold") === "1" ? "1" : undefined
+  const lang = readOption(options, "lang")
   const { platform, holder } = await setupHolder()
   const { session } = await loginAndSigner(platform, identity.privateKey)
-  const subject = readSubject(options)
+  // 申请前先查模板：用户按真实字段构造 --subject，而不是猜 key。
+  const guide = await fetchTemplateGuide(holder, session, { templateId, ...(lang === undefined ? {} : { lang }) })
+  console.log(guide)
+  const subject = readSubject(options, guide)
   await holder.assertApplication(session, { templateId, ...(hold === undefined ? {} : { hold }) })
   const applyNo = await holder.applyCredential(session, {
     templateId,
@@ -205,6 +218,21 @@ async function cmdApply(options: Readonly<Record<string, string>>): Promise<void
   const application = { applyNo, templateId, hold: hold === "1" ? 1 : 0, createdAt: new Date().toISOString() }
   const path = await writeApplication(application)
   console.log({ applyNo, applicationFile: path })
+}
+
+async function cmdTemplate(options: Readonly<Record<string, string>>): Promise<void> {
+  printSection("查询凭证模板字段")
+  const identity = await requireIdentity()
+  const templateId = readOption(options, "template-id")
+  if (templateId === undefined) {
+    console.error("缺少 templateId：请用 --template-id=... 指定模板（可先用 list 查看可申请模板）")
+    process.exit(1)
+  }
+  const lang = readOption(options, "lang")
+  const { platform, holder } = await setupHolder()
+  const { session } = await loginAndSigner(platform, identity.privateKey)
+  const guide = await fetchTemplateGuide(holder, session, { templateId, ...(lang === undefined ? {} : { lang }) })
+  console.log(guide)
 }
 
 const statusEnumMap: Readonly<Record<string, string>> = {
@@ -289,6 +317,7 @@ async function cmdExport(): Promise<void> {
 const commands: Readonly<Record<string, (options: Readonly<Record<string, string>>) => Promise<void>>> = {
   generate: cmdGenerate,
   list: cmdList,
+  template: cmdTemplate,
   apply: cmdApply,
   status: cmdStatus,
   download: cmdDownload,
@@ -297,8 +326,8 @@ const commands: Readonly<Record<string, (options: Readonly<Record<string, string
 
 function printHelp(): void {
   console.error("用法：npm run sample:holder -- <command> [--key=value]")
-  console.error("命令：generate | list | apply | status | download | export | help")
-  console.error("常用参数：--page-size=... --template-id=... --subject='{\"key\":\"value\"}' --hold=1 --apply-no=... --credential-id=...")
+  console.error("命令：generate | list | template | apply | status | download | export | help")
+  console.error("常用参数：--page-size=... --template-id=... --lang=... --subject='{\"key\":\"value\"}' --hold=1 --apply-no=... --credential-id=...")
   console.error("配置：在 .env.holder 设置不含 /server 的 VC_PLATFORM_BASE_URL 主机根地址；平台路由由 SDK 固定")
 }
 
