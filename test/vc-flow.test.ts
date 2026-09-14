@@ -8,6 +8,7 @@ import { configureBidSdk } from "../src/config.js"
 import { createVcOperationsController } from "../src/vc/index.js"
 import { parseCredentialId } from "../src/vc/vc-domain.js"
 import { encodeJsonPart, parseJws, readJwsAlgorithm } from "../src/vc/vc-jws.js"
+import { buildSubjectExample, formatTemplateGuide, parseTemplateDetail } from "../sample/holder-template.js"
 import { createMockPlatform } from "./vc-mock-platform.js"
 
 configureBidSdk({
@@ -150,4 +151,52 @@ test("Given a download response with an outer JWS, when the vc field contains th
   const standardJws = `${encodeJsonPart({ alg: "ED25519" })}.${encodeJsonPart(credential)}.signature`
   const fallback = holder.parseDownloadedCredential({ jws: standardJws, vc: null, issueBid: credential.issuer, issueName: "Issuer" })
   assert.deepEqual(fallback.credential, credential)
+})
+
+test("Given the mock platform template detail, when parsing it before applying, then metadata is exposed, real field keys are listed and the subject example round-trips to a valid subject", async () => {
+  const vc = createTrustedVc()
+  const mock = createMockPlatform()
+  const holderKeys = enc.getBidAndKeyPairBySM2()
+  const holderSigner = vc.signer.fromPrivateKey(holderKeys.encPrivateKey)
+  const platform = vc.platform.create({ fetcher: mock.fetcher })
+  const holder = vc.holder.create(platform)
+  const session = await platform.login({ bid: holderSigner.address, signer: holderSigner })
+
+  const detail = await holder.getTemplate(session, { templateId: "template-identity" })
+  const parsedDetail = parseTemplateDetail(detail)
+  assert.equal(parsedDetail.metadata["templateName"], "身份凭证")
+  assert.equal(parsedDetail.metadata["data"], undefined)
+  assert.deepEqual(parsedDetail.fields?.map((field) => field.key), ["name", "age"])
+  assert.equal(parsedDetail.fields?.[0]?.label, "姓名")
+
+  const guide = formatTemplateGuide(detail)
+  assert.match(guide, /templateName: 身份凭证/)
+  assert.match(guide, /key=name/)
+  assert.match(guide, /key=age/)
+  assert.match(guide, /--subject='/)
+
+  // 用户按示例填 value 后提交：示例本身必须是合法的 subject 对象（attributes 结构）。
+  const example = buildSubjectExample(parsedDetail.fields ?? [])
+  const subject = JSON.parse(example) as { attributes: Array<{ key: string; value: string }> }
+  assert.deepEqual(subject.attributes.map((item) => item.key), ["name", "age"])
+  assert.equal(subject.attributes[0]?.value, "请填写姓名")
+
+  // 提供合法 subject 时 apply 仍原样提交该 subject（不因模板查询改变行为）。
+  const givenSubject = { name: "张三" }
+  const applyNo = await holder.applyCredential(session, { templateId: "template-identity", subject: givenSubject })
+  assert.equal(applyNo, "apply-1")
+  assert.equal(mock.getLastAppliedContent(), JSON.stringify(givenSubject))
+})
+
+test("Given a template detail whose data is malformed, when formatting guidance, then the raw detail is printed instead of crashing", () => {
+  const malformed = formatTemplateGuide({ templateName: "坏模板", data: "{not-json" })
+  assert.match(malformed, /未能识别模板字段结构/)
+  assert.match(malformed, /templateName/)
+  assert.match(malformed, /\{not-json/)
+
+  const notAnArray = formatTemplateGuide({ templateName: "空模板", data: JSON.stringify({ unexpected: true }) })
+  assert.match(notAnArray, /未能识别模板字段结构/)
+
+  const notAnObject = formatTemplateGuide("scalar")
+  assert.match(notAnObject, /未能识别模板字段结构/)
 })

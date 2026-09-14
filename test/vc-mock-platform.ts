@@ -48,6 +48,8 @@ export type MockPlatform = {
   readonly remoteBaseUrl: string
   readonly fetcher: typeof fetch
   getCredential(): IssuedCredential | undefined
+  /** 最近一次 apply 请求提交的 content（JSON 字符串），用于断言 subject 原样上送。 */
+  getLastAppliedContent(): string | undefined
 }
 
 export function createMockPlatform(): MockPlatform {
@@ -55,6 +57,7 @@ export function createMockPlatform(): MockPlatform {
   const applications = new Map<string, Application>()
   const payloadById = new Map<string, PendingPayload>()
   let credential: IssuedCredential | undefined
+  let lastAppliedContent: string | undefined
 
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input))
@@ -86,11 +89,17 @@ export function createMockPlatform(): MockPlatform {
       })
     }
     if (url.pathname === `${SERVER_PREFIX}/credential/template/detail`) {
-      return response({ errorCode: 0, message: "SUCCESS", data: { templateBid: "template-identity", templateName: "身份凭证", issuerBid: "did:bid:issuer", data: "[]" } })
+      // 与真实平台一致的形态：data 是 JSON 字符串，内容为申请字段定义数组（attributes 结构）。
+      const templateData = JSON.stringify([
+        { key: "name", label: "姓名", type: "2", format: "String", value: "" },
+        { key: "age", label: "年龄", type: "2", format: "Number", value: "" },
+      ])
+      return response({ errorCode: 0, message: "SUCCESS", data: { templateBid: "template-identity", templateName: "身份凭证", issuerBid: "did:bid:issuer", data: templateData } })
     }
     if (url.pathname === `${SERVER_PREFIX}/credential/assert`) return response({ errorCode: 0, message: "SUCCESS", data: {} })
     if (url.pathname === `${SERVER_PREFIX}/credential/apply`) {
       const applyNo = "apply-1"
+      lastAppliedContent = readString(body, "content")
       applications.set(applyNo, {
         applyNo,
         holderBid: readString(body, "bid"),
@@ -192,6 +201,7 @@ export function createMockPlatform(): MockPlatform {
     remoteBaseUrl: "https://mock.cross.example",
     fetcher,
     getCredential: () => credential,
+    getLastAppliedContent: () => lastAppliedContent,
   }
 }
 
