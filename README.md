@@ -229,6 +229,7 @@ const parsed = holder.parseCredential(downloaded.jws)
 ```bash
 npm run sample:holder -- generate    # 生成持证方密钥并保存身份文件
 npm run sample:holder -- list        # 可申请凭证列表
+npm run sample:holder -- template --template-id=<模板ID>  # 查询模板字段并生成 subject 示例
 npm run sample:holder -- apply --template-id=<模板ID> --subject='{...attributes...}'
 npm run sample:holder -- status
 npm run sample:holder -- download
@@ -236,6 +237,7 @@ npm run sample:holder -- export      # 导出标准 VC 出示信封（demo.json 
 ```
 
 - 配置在 `.env.holder`（复制自 `.env.holder.example`）：只需 `VC_PLATFORM_BASE_URL`。
+- 申请前可先运行 `template` 查询模板详情；`apply` 也会在提交前自动查询并打印实际字段及可复制的 `--subject` 示例。不传 `--subject` 时只显示指引，不会提交申请。
 - `--subject` 必须是非空 JSON 对象；Windows PowerShell 下 JSON 引号会被 npm run 剥掉，需直接执行 `node --env-file=.env.holder --import tsx sample/holder.ts apply ...`（见实战指南）。
 - 身份/申请/凭证文件都在 `sample/output/`（已被 gitignore），不要提交私钥。
 
