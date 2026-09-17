@@ -234,7 +234,10 @@ npm run sample:holder -- apply --template-id=<模板ID> --subject='{...attribute
 npm run sample:holder -- status
 npm run sample:holder -- download
 npm run sample:holder -- export      # 导出标准 VC 出示信封（demo.json 同款）
+npm run sample:holder -- export --disclose=name  # 导出选择性披露版：只出示 name，其余字段仅保留 hash
 ```
+
+- 选择性披露：凭证内字段以 `{value, salt, hash}` 结构签发（发行方对去盐 hash 签名）。`export --disclose=key1,key2` 生成的出示 JWS 只携带所选字段的明文与盐，未选字段仅保留 hash，且复用发行方原签名——验证方（第六节）会同时校验披露 hash 与签名。不传 `--disclose` 时导出全量版。
 
 - 配置在 `.env.holder`（复制自 `.env.holder.example`）：只需 `VC_PLATFORM_BASE_URL`。
 - 申请前可先运行 `template` 查询模板详情；`apply` 也会在提交前自动查询并打印实际字段及可复制的 `--subject` 示例。不传 `--subject` 时只显示指引，不会提交申请。
