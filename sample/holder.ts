@@ -5,6 +5,7 @@ import { resolve } from "node:path"
 import {
   configureBidSdk,
   createBidSdk,
+  createSelectiveDisclosurePresentation,
   parseApplyNo,
   parseCredentialId,
   parseJws,
@@ -12,6 +13,7 @@ import {
   type PlatformSession,
   type TemplateDetailInput,
   type VcHolder,
+  type VcPayload,
   type VcSigner,
 } from "../src/index.js"
 import type { VcPlatformClient } from "../src/vc/vc-platform.js"
@@ -40,7 +42,7 @@ import { formatTemplateGuide } from "./holder-template.js"
  *   apply           申请凭证（templateDetail + assert + apply；缺 --subject 时打印字段指引后退出）
  *   status          查看申请进度
  *   download        下载已签发凭证
- *   export          导出凭证文件并打印绝对路径
+ *   export          导出凭证文件并打印绝对路径（--disclose=key1,key2 生成选择性披露版）
  *   help            显示帮助
  *
  * 每个命令都从身份文件读取私钥并重新登录平台，accessToken 不持久化。
@@ -291,13 +293,54 @@ async function loadLatestCredentialWithPath(): Promise<{ filePath: string; crede
   return { filePath, credential }
 }
 
-async function cmdExport(): Promise<void> {
+/** credentialSubject 中除 id 外的可披露字段名列表。 */
+function disclosableFields(payload: VcPayload): string[] {
+  return Object.entries(payload.credentialSubject)
+    .filter(([key, value]) => key !== "id" && typeof value === "object" && value !== null && !Array.isArray(value) && "hash" in value)
+    .map(([key]) => key)
+}
+
+/**
+ * 校验 --disclose 字段列表：
+ *  - 必须都是凭证里实际存在的选择性披露字段；
+ *  - 值为空（未填）的字段无法披露。
+ */
+function resolveDiscloseList(payload: VcPayload, option: string | undefined): string[] | undefined {
+  if (option === undefined) return undefined
+  const requested = option.split(",").map((item) => item.trim()).filter((item) => item !== "")
+  if (requested.length === 0) return undefined
+  const available = disclosableFields(payload)
+  const unknown = requested.filter((key) => !available.includes(key))
+  if (unknown.length > 0) {
+    console.error(`--disclose 中的字段不在凭证可选择披露字段里：${unknown.join(", ")}；可披露字段：${available.join(", ") || "（无）"}`)
+    process.exit(1)
+  }
+  const empty = requested.filter((key) => {
+    const field = payload.credentialSubject[key] as { value?: unknown } | undefined
+    return field?.value === undefined || field?.value === ""
+  })
+  if (empty.length > 0) {
+    console.error(`以下字段值为空，无法披露：${empty.join(", ")}`)
+    process.exit(1)
+  }
+  return requested
+}
+
+async function cmdExport(options: Readonly<Record<string, string>>): Promise<void> {
   printSection("导出凭证")
   const { filePath, credential } = await loadLatestCredentialWithPath()
   // 与平台钱包/插件导出的标准 VC 信封保持一致（参考 demo.json）：
   // proof.jwt 是原始三段式 compact JWS，其余字段来自 VC payload 的公开部分。
-  const parsed = parseJws(credential.jws)
-  const payload = vcPayloadSchema.parse(parsed.payload)
+  let jws = credential.jws
+  const fullPayload = vcPayloadSchema.parse(parseJws(jws).payload)
+  const disclose = resolveDiscloseList(fullPayload, readOption(options, "disclose"))
+  if (disclose !== undefined) {
+    // 选择性披露：未选中的字段只保留 hash（值与盐不进入出示 JWS），复用发行方原签名。
+    jws = createSelectiveDisclosurePresentation(jws, disclose)
+    console.log(`选择性披露字段：${disclose.join(", ")}`)
+    console.log(`未披露字段（仅保留 hash）：${disclosableFields(fullPayload).filter((key) => !disclose.includes(key)).join(", ") || "（无）"}`)
+  }
+  const payload = vcPayloadSchema.parse(parseJws(jws).payload)
   const presentation = {
     "@context": payload["@context"],
     credentialSubject: payload.credentialSubject as Record<string, unknown>,
@@ -305,7 +348,7 @@ async function cmdExport(): Promise<void> {
     ...(payload.validBefore === undefined ? {} : { validBefore: payload.validBefore }),
     type: payload.type,
     issuanceDate: payload.issuanceDate,
-    proof: { type: "JwtProof2020" as const, jwt: credential.jws },
+    proof: { type: "JwtProof2020" as const, jwt: jws },
   }
   const path = await writePresentation(presentation)
   console.log({ sourceFile: filePath, presentationFile: path })
@@ -327,8 +370,9 @@ const commands: Readonly<Record<string, (options: Readonly<Record<string, string
 function printHelp(): void {
   console.error("用法：npm run sample:holder -- <command> [--key=value]")
   console.error("命令：generate | list | template | apply | status | download | export | help")
-  console.error("常用参数：--page-size=... --template-id=... --lang=... --subject='{\"key\":\"value\"}' --hold=1 --apply-no=... --credential-id=...")
+  console.error("常用参数：--page-size=... --template-id=... --lang=... --subject='{\"key\":\"value\"}' --hold=1 --apply-no=... --credential-id=... --disclose=key1,key2")
   console.error("配置：在 .env.holder 设置不含 /server 的 VC_PLATFORM_BASE_URL 主机根地址；平台路由由 SDK 固定")
+  console.error("export --disclose 只披露指定字段（其余字段仅保留 hash），生成的出示信封仍可用 verifier sample 验证")
 }
 
 async function main(argv: readonly string[]): Promise<void> {
