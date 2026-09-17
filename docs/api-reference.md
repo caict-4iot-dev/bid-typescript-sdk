@@ -1,8 +1,6 @@
 # 公共 API 参考
 
-本文按 `src/index.ts` 记录 `@caict-bif/bid-typescript-sdk` 当前公开 API。内容适用于 `0.1.0`，Node.js 要求 `>= 20`。
-
-> 本文是源码仓库中的版本化参考文档。当前 `0.1.0` npm 发布包的文件白名单仅包含 `dist/` 和 `README.md`，因此安装后的 `node_modules/@caict-bif/bid-typescript-sdk/` 中不包含本文件；请在与所用版本对应的源码仓库标签或归档中查阅。若后续需要随 npm 包分发，发布前必须将 `docs/` 加入 `package.json#files` 并用 `npm pack --dry-run` 核对内容。
+本文按 `src/index.ts` 记录 `@caict-bif/bid-typescript-sdk` 当前公开 API。内容适用于 `1.0.0`，Node.js 要求 `>= 20`。
 
 普通业务使用 `configureBidSdk()` 配置节点 URL，再通过 `createBidSdk()` 返回的 `sdk.*` facade 操作。合约地址、VC 平台路由、信任读取器和本地/平台验证器实现均由 SDK 内部管理。
 
@@ -741,7 +739,7 @@ class VcHolder {
 - `listRecommendedCredentials()` 固定查询持证方普通凭证分类 `type=2`，调用方只提供分页参数。
 - `applyCredential()` 优先发送 `rawContent`。未提供时发送 `JSON.stringify(subject ?? {})`。
 - `getApplicationStatus()` 调用需要登录的 `/server/credential/owner/list`，请求固定为 `{ applyNo, pageStart: 1, pageSize: 2 }`。持证方身份由 access token 确定，SDK 再按 `applyNo` 精确过滤，并要求分页总数和匹配数都恰好为 1；无匹配或多条匹配均抛 `BidValidationError`。状态 `1/2/3` 分别表示申请中、已通过、已拒绝。
-- owner list 行中的 `credentialBid` 映射为 `getApplicationStatus()` 返回的 `credentialId`，可直接传给 `downloadCredential()`。旧 `/server/credential/status` 未实现，当前状态查询不使用该路由。
+- owner list 行中的 `credentialBid` 映射为 `getApplicationStatus()` 返回的 `credentialId`，可直接传给 `downloadCredential()`。
 - `downloadCredential()` 的 `userBid` 默认使用 session 中的 bid。
 - `parseCredential()` 只做本地 JWS 与 VC payload 解析，不代表签名、信任或撤销验证通过。
 
@@ -882,7 +880,7 @@ sdk.vc.verifier.verifyCredential(
 ): Promise<VerificationResult>
 ```
 
-这是默认验证入口，在 SDK 内执行 JWS/VC 格式、发行方信任、有效期、可选发行方签名和选择性披露检查。发行方信任自动复用 `sdk.connect()` 的连接；未连接时抛 `BidConfigurationError`。撤销状态和 holder proof 当前仍为 `skipped`。
+这是默认验证入口，在 SDK 内执行 JWS/VC 格式、发行方信任、有效期、可选发行方签名、选择性披露和撤销状态检查。发行方信任自动复用 `sdk.connect()` 的连接；未连接时抛 `BidConfigurationError`。撤销状态通过 `vcRevocationUrl` 查询发证方平台（在线 issuer-service 状态，非独立链上证明）。
 
 IAM/TDS 查询规则与 Java SDK 一致：先读取固定 IAM 合约的 `admins` metadata，再读取固定 TDS 合约的 `issuer_<issuerBid>` metadata。合约地址和读取器是内部实现，用户不配置。
 
@@ -945,7 +943,7 @@ type VerificationResult = {
 
 `raw` 是平台验证服务数据的未知透传值。默认验证通常不包含该字段。
 
-`verified` 代表完整验证结论。它要求格式、发行方信任、发行方签名、有效期和撤销都为 `passed`，且披露不能为 `failed`。本地验证会解析 issuer DID（直读 DDO 合约 `queryBid`）、查询 IAM/TDS 信任，并通过 `vcRevocationUrl`（发证方平台地址）查询撤销状态；远程模式仍跳过披露和撤销，所以结果通常为 `false`。
+`verified` 代表完整验证结论。它要求格式、发行方信任、发行方签名、有效期和撤销都为 `passed`，且披露不能为 `failed`。本地验证会解析 issuer DID（直读 DDO 合约 `queryBid`）、查询 IAM/TDS 信任，并通过 `vcRevocationUrl`（发证方平台地址）查询撤销状态；远程模式不执行披露和撤销检查。
 
 正确读取方式：
 
@@ -1231,21 +1229,7 @@ function encodeCanonicalJson(value: unknown): string
 
 按 canonical JSON 序列化，再转 UTF-8 base64url。无法 canonicalize 时抛 `BidValidationError`。
 
-## 16. 已知限制
-
-- 没有 BID 删除 API。
-- `resolve()` 只读解析服务，解析索引可能晚于链上确认。
-- 交易公共返回值只区分已确认成功和未确认。`confirmed: false` 不是失败证明。
-- 交易确认窗口和轮询间隔没有公共配置项。
-- `BidSdkConnectConfig` 的嵌套配置类型不能从包入口单独导入，只能结构化配置。
-- 若干 VC 平台方法和 `IssueResult.submitResult` 返回 `unknown`，SDK 不保证平台业务 DTO。
-- 本地验证已实现 direct/BOP 的 IAM/TDS metadata 信任查询；真实环境需要配置节点或 BOP 连接及 IAM/TDS 合约地址。
-- 本地验证仍未实现撤销状态和 holder proof。
-- 远程验证不暴露撤销状态，也不自动降级到本地验证。
-- `VerificationResult.verified` 是完整验证结论。检查项被跳过时通常为 `false`。
-- 高级 JWS 与选择性披露函数面向协议互操作，普通业务优先使用 `sdk.vc` 的角色和验证器 facade。
-
-## 17. 完整导出索引
+## 16. 完整导出索引
 
 以下清单与当前 `src/index.ts` 对齐。
 
