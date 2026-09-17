@@ -1102,6 +1102,43 @@ function encodeJsonPart(value: unknown): string
 
 ## 15. 选择性披露工具，高级 API
 
+### 工作原理
+
+选择性披露凭证的 `credentialSubject` 中，除 `id` 外每个字段都是 `{ value, salt, hash }` 结构：`hash = hash(value + salt)`。发行方（平台）对**去除 value/salt 后只含 hash 的 payload** 签名，因此：
+
+- 出示方可以任选字段子集保留明文，未选字段只留 hash，**无需重新签名**——签名始终覆盖 hash-only payload，任何子集都验签通过；
+- 验证方对已披露字段重算 `hash(value + salt)` 与凭证中的 `hash` 比对，防篡改；对未披露字段只能确认"存在同 hash 承诺"，拿不到明文。
+
+算法 profile 由凭证 payload 的 `parseType` 决定：`sel-disclose-ED25519` 用 SHA-256，`sel-disclose-SM2` 用 SM3。
+
+### 典型用法：持证方生成披露出示 → 验证方核验
+
+```ts
+import {
+  createSelectiveDisclosurePresentation,
+  parseJws,
+  verifySelectiveDisclosure,
+} from "@caict-bif/bid-typescript-sdk"
+
+// 持证方：从已下载的完整凭证 JWS 生成只披露 name 的出示 JWS（复用发行方原签名）。
+const disclosedJws = createSelectiveDisclosurePresentation(fullJws, ["name"])
+
+// 验证方：对收到的 JWS 先本地校验披露结构（不依赖公钥）。
+const parsed = parseJws(disclosedJws)
+const disclosure = verifySelectiveDisclosure(parsed)
+console.log(disclosure.valid, disclosure.disclosedFields) // true, ["name"]
+
+// 再用发行方公钥验签（生产建议直接走 sdk.vc.verifier.verifyCredential，
+// 它会自动执行包括披露在内的全部检查项）。
+const withKey = verifySelectiveDisclosure(parsed, issuerPublicKey)
+```
+
+说明：
+
+- `createSelectiveDisclosurePresentation()` 的 `disclose` 列表中的字段保留 `value`、`salt`、`hash`；其余 subject 字段只保留 `hash`。值为空（未填写）的字段无法披露，应先从完整凭证中过滤。
+- `verifySelectiveDisclosure()` 不传公钥时，`valid: true` 只代表披露 hash 结构有效，**不代表发行方签名已验证**——必须传公钥或走 `sdk.vc.verifier.verifyCredential()` 才是完整结论。
+- 日常业务优先使用角色流程：持证方 sample `export --disclose=key1,key2` 一步生成披露出示信封；验证方 `sdk.vc.verifier.verifyCredential()` 的 `checks.disclosure` 自动校验。本节函数面向协议互操作或自定义流程。
+
 ### 类型
 
 ```ts
